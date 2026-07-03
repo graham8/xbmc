@@ -2,8 +2,10 @@ include ../../Makefile.include LIBBLURAY-VERSION ../../download-files.include
 DEPS = ../../Makefile.include LIBBLURAY-VERSION Makefile ../../download-files.include \
                                   001-darwinembed_DiskArbitration-revert.patch \
                                   002-darwin-dlopen_searchpath.patch \
-                                  003-win-libxml_searchname.patch \
+                                  003-all-libxml_searchname.patch \
+                                  004-win-remove-lib-version.patch \
                                   tvos.patch
+
 MESON_BUILD_TYPE=release
 
 ifeq ($(DEBUG_BUILD), yes)
@@ -40,20 +42,24 @@ LIBDYLIB=$(PLATFORM)/build/src/$(BYPRODUCT)
 
 all: .installed-$(PLATFORM)
 
-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
+.configured-$(PLATFORM): $(DEPS) | $(TARBALLS_LOCATION)/$(ARCHIVE).$(HASH_TYPE)
 	rm -rf $(PLATFORM); mkdir -p $(PLATFORM)
 	cd $(PLATFORM); $(ARCHIVE_TOOL) $(ARCHIVE_TOOL_FLAGS) $(TARBALLS_LOCATION)/$(ARCHIVE)
 ifeq ($(OS),darwin_embedded)
 	cd $(PLATFORM); patch -p1 -i ../001-darwinembed_DiskArbitration-revert.patch
 endif
 	cd $(PLATFORM); patch -p1 -i ../002-darwin-dlopen_searchpath.patch
-	cd $(PLATFORM); patch -p1 -i ../003-win-libxml_searchname.patch
+	cd $(PLATFORM); patch -p1 -i ../003-all-libxml_searchname.patch
 ifeq ($(TARGET_PLATFORM),appletvos)
 	cd $(PLATFORM); patch -p1 -i ../tvos.patch
 endif
+ifeq ($(TARGET_PLATFORM),windows)
+	cd $(PLATFORM); patch -p1 -i ../004-win-remove-lib-version.patch
+endif
 	cd $(PLATFORM); $(CONFIGURE)
+	touch $@
 
-$(LIBDYLIB): $(PLATFORM)
+$(LIBDYLIB): .configured-$(PLATFORM)
 	cd $(PLATFORM)/build; $(NATIVEPREFIX)/bin/ninja -v
 
 .installed-$(PLATFORM): $(LIBDYLIB)
@@ -62,7 +68,7 @@ $(LIBDYLIB): $(PLATFORM)
 
 clean:
 	$(MAKE) -C $(PLATFORM) clean
-	rm -f .installed-$(PLATFORM)
+	rm -f .installed-$(PLATFORM) .configured-$(PLATFORM)
 
 distclean::
-	rm -rf $(PLATFORM) .installed-$(PLATFORM)
+	rm -rf $(PLATFORM) .installed-$(PLATFORM) .configured-$(PLATFORM)

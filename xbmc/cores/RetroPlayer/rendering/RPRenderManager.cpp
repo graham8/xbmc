@@ -342,6 +342,7 @@ void CRPRenderManager::FrameMove()
 
   if (bIsConfigured)
   {
+    std::unique_lock<std::mutex> lock{m_oldRenderersMutex};
     for (auto& renderer : m_renderers)
       renderer->FrameMove();
   }
@@ -364,8 +365,11 @@ void CRPRenderManager::CheckFlush()
       m_bHasCachedFrame = false;
     }
 
-    for (const auto& renderer : m_renderers)
-      renderer->Flush();
+    {
+      std::unique_lock<std::mutex> lock{m_oldRenderersMutex};
+      for (const auto& renderer : m_renderers)
+        renderer->Flush();
+    }
 
     m_processInfo.GetBufferManager().FlushPools();
 
@@ -429,6 +433,11 @@ void CRPRenderManager::RenderControl(bool bClear,
   if (renderBuffer == nullptr)
     return;
 
+  // Calculate alpha (before SetTransform overrides the accumulated alpha)
+  UTILS::COLOR::Color alpha = 255;
+  if (bUseAlpha)
+    alpha = m_renderContext.MergeAlpha(UTILS::COLOR::BLACK) >> 24;
+
   // Set fullscreen
   const bool bWasFullscreen = m_renderContext.IsFullScreenVideo();
   if (bWasFullscreen)
@@ -451,11 +460,6 @@ void CRPRenderManager::RenderControl(bool bClear,
     m_renderContext.SetScissors(old);
   }
 
-  // Calculate alpha
-  UTILS::COLOR::Color alpha = 255;
-  if (bUseAlpha)
-    alpha = m_renderContext.MergeAlpha(UTILS::COLOR::BLACK) >> 24;
-
   RenderInternal(renderer, renderBuffer, false, alpha);
 
   // Restore coordinates
@@ -474,6 +478,8 @@ void CRPRenderManager::ClearBackground()
 bool CRPRenderManager::SupportsRenderFeature(RENDERFEATURE feature) const
 {
   //! @todo Move to ProcessInfo
+  std::unique_lock<std::mutex> lock{m_oldRenderersMutex};
+
   for (const auto& renderer : m_renderers)
   {
     if (renderer->Supports(feature))
@@ -567,6 +573,8 @@ std::shared_ptr<CRPBaseRenderer> CRPRenderManager::GetRendererForPool(
     CLog::Log(LOGDEBUG, "RetroPlayer[RENDER]: buffer pool is not compatible with renderer");
     return renderer;
   }
+
+  std::unique_lock<std::mutex> lock{m_oldRenderersMutex};
 
   // Get compatible renderer for this buffer pool
   for (const auto& it : m_renderers)

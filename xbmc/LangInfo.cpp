@@ -29,13 +29,13 @@
 #include "utils/LangCodeExpander.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
-#include "utils/XBMCTinyXML.h"
+#include "utils/XBMCTinyXML2.h"
 #include "utils/XMLUtils.h"
 #include "utils/log.h"
 #include "weather/WeatherManager.h"
 
 #include <algorithm>
-#include <stdexcept>
+#include <array>
 
 namespace
 {
@@ -47,7 +47,7 @@ std::string GetDateStringWithFormat(const CDateTime& date, const std::string& fo
 }
 } // namespace
 
-using namespace PVR;
+using namespace KODI::LANGINFO;
 
 static std::string shortDateFormats[] = {
     // clang-format off
@@ -102,42 +102,42 @@ static std::string longDateFormats[] = {
 #define TIME_FORMAT_12HOURS       "12hours"
 #define TIME_FORMAT_24HOURS       "24hours"
 
-typedef struct TemperatureInfo {
+struct TemperatureInfo
+{
   CTemperature::Unit unit;
   std::string name;
-} TemperatureInfo;
-
-static TemperatureInfo temperatureInfo[] = {
-  { CTemperature::UnitFahrenheit, "f" },
-  { CTemperature::UnitKelvin,     "k" },
-  { CTemperature::UnitCelsius,    "c" },
-  { CTemperature::UnitReaumur,    "re" },
-  { CTemperature::UnitRankine,    "ra" },
-  { CTemperature::UnitRomer,      "ro" },
-  { CTemperature::UnitDelisle,    "de" },
-  { CTemperature::UnitNewton,     "n" }
 };
+
+static const auto temperatureInfo = std::array{TemperatureInfo{CTemperature::UnitFahrenheit, "f"},
+                                               TemperatureInfo{CTemperature::UnitKelvin, "k"},
+                                               TemperatureInfo{CTemperature::UnitCelsius, "c"},
+                                               TemperatureInfo{CTemperature::UnitReaumur, "re"},
+                                               TemperatureInfo{CTemperature::UnitRankine, "ra"},
+                                               TemperatureInfo{CTemperature::UnitRomer, "ro"},
+                                               TemperatureInfo{CTemperature::UnitDelisle, "de"},
+                                               TemperatureInfo{CTemperature::UnitNewton, "n"}};
 
 #define TEMP_UNIT_STRINGS         20027
 
-typedef struct SpeedInfo {
+struct SpeedInfo
+{
   CSpeed::Unit unit;
   std::string name;
-} SpeedInfo;
+};
 
-static SpeedInfo speedInfo[] = {
-  { CSpeed::UnitKilometresPerHour,    "kmh" },
-  { CSpeed::UnitMetresPerMinute,      "mpmin" },
-  { CSpeed::UnitMetresPerSecond,      "mps" },
-  { CSpeed::UnitFeetPerHour,          "fth" },
-  { CSpeed::UnitFeetPerMinute,        "ftm" },
-  { CSpeed::UnitFeetPerSecond,        "fts" },
-  { CSpeed::UnitMilesPerHour,         "mph" },
-  { CSpeed::UnitKnots,                "kts" },
-  { CSpeed::UnitBeaufort,             "beaufort" },
-  { CSpeed::UnitInchPerSecond,        "inchs" },
-  { CSpeed::UnitYardPerSecond,        "yards" },
-  { CSpeed::UnitFurlongPerFortnight,  "fpf" }
+static const auto speedInfo = std::array{
+    SpeedInfo{CSpeed::UnitKilometresPerHour, "kmh"},
+    SpeedInfo{CSpeed::UnitMetresPerMinute, "mpmin"},
+    SpeedInfo{CSpeed::UnitMetresPerSecond, "mps"},
+    SpeedInfo{CSpeed::UnitFeetPerHour, "fth"},
+    SpeedInfo{CSpeed::UnitFeetPerMinute, "ftm"},
+    SpeedInfo{CSpeed::UnitFeetPerSecond, "fts"},
+    SpeedInfo{CSpeed::UnitMilesPerHour, "mph"},
+    SpeedInfo{CSpeed::UnitKnots, "kts"},
+    SpeedInfo{CSpeed::UnitBeaufort, "beaufort"},
+    SpeedInfo{CSpeed::UnitInchPerSecond, "inchs"},
+    SpeedInfo{CSpeed::UnitYardPerSecond, "yards"},
+    SpeedInfo{CSpeed::UnitFurlongPerFortnight, "fpf"},
 };
 
 #define SPEED_UNIT_STRINGS        20200
@@ -169,13 +169,9 @@ static CTemperature::Unit StringToTemperatureUnit(const std::string& temperature
   std::string unit(temperatureUnit);
   StringUtils::ToLower(unit);
 
-  for (const TemperatureInfo& info : temperatureInfo)
-  {
-    if (info.name == unit)
-      return info.unit;
-  }
-
-  return CTemperature::UnitCelsius;
+  const auto it = std::ranges::find_if(temperatureInfo,
+                                       [&unit](const auto& info) { return info.name == unit; });
+  return it != temperatureInfo.end() ? it->unit : CTemperature::UnitCelsius;
 }
 
 static CSpeed::Unit StringToSpeedUnit(const std::string& speedUnit)
@@ -183,13 +179,9 @@ static CSpeed::Unit StringToSpeedUnit(const std::string& speedUnit)
   std::string unit(speedUnit);
   StringUtils::ToLower(unit);
 
-  for (const SpeedInfo& info : speedInfo)
-  {
-    if (info.name == unit)
-      return info.unit;
-  }
-
-  return CSpeed::UnitKilometresPerHour;
+  const auto it =
+      std::ranges::find_if(speedInfo, [&unit](const auto& info) { return info.name == unit; });
+  return it != speedInfo.end() ? it->unit : CSpeed::UnitKilometresPerHour;
 }
 
 struct SortLanguage
@@ -203,6 +195,33 @@ struct SortLanguage
 
     return strLeft.compare(strRight) < 0;
   }
+};
+
+struct SpecialLanguageSetting
+{
+  std::string_view m_code;
+  int m_message;
+};
+
+// Elements sorted in order of appearance in the settings
+constexpr auto specialAudioLangSettings = std::array{
+    SpecialLanguageSetting{audioLanguageMediaDefault, 307},
+    SpecialLanguageSetting{audioLanguageOriginal, 308},
+    SpecialLanguageSetting{audioLanguageDefault, 309},
+};
+
+// Elements in order of appearance in the settings
+constexpr auto specialSubtitlesLangSettings = std::array{
+    SpecialLanguageSetting{subLanguageNone, 231},
+    SpecialLanguageSetting{subLanguageForcedOnly, 13207},
+    SpecialLanguageSetting{subLanguageOriginal, 308},
+    SpecialLanguageSetting{subLanguageDefault, 309},
+};
+
+// Elements in order of appearance in the settings
+constexpr auto specialSubtitlesDownloadLangSettings = std::array{
+    SpecialLanguageSetting{subLanguageOriginal, 308},
+    SpecialLanguageSetting{subLanguageDefault, 309},
 };
 
 CLangInfo::CRegion::CRegion()
@@ -239,7 +258,7 @@ void CLangInfo::CRegion::SetTimeZone(const std::string& strTimeZone)
   m_strTimeZone = strTimeZone;
 }
 
-void CLangInfo::CRegion::SetGlobalLocale()
+void CLangInfo::CRegion::SetGlobalLocale(CLangInfo& langInfo)
 {
   std::string strLocale;
   if (!m_strRegionLocaleName.empty())
@@ -256,7 +275,8 @@ void CLangInfo::CRegion::SetGlobalLocale()
     strLocale += ".UTF-8";
 #endif
   }
-  g_langInfo.m_originalLocale = std::locale(std::locale::classic(), new custom_numpunct(m_cDecimalSep, m_cThousandsSep, m_strGrouping));
+  langInfo.m_originalLocale = std::locale(
+      std::locale::classic(), new custom_numpunct(m_cDecimalSep, m_cThousandsSep, m_strGrouping));
 
   CLog::Log(LOGDEBUG, "trying to set locale to {}", strLocale);
 
@@ -284,15 +304,15 @@ void CLangInfo::CRegion::SetGlobalLocale()
     strLocale = "C";
   }
 
-  g_langInfo.m_systemLocale = current_locale; //! @todo move to CLangInfo class
-  g_langInfo.m_collationtype = 0;
+  langInfo.m_systemLocale = current_locale; //! @todo move to CLangInfo class
+  langInfo.m_collationtype = 0;
   std::locale::global(current_locale);
 #endif
 
 #ifndef TARGET_WINDOWS
-  if (setlocale(LC_COLLATE, strLocale.c_str()) == NULL ||
-      setlocale(LC_CTYPE, strLocale.c_str()) == NULL ||
-      setlocale(LC_TIME, strLocale.c_str()) == NULL)
+  if (setlocale(LC_COLLATE, strLocale.c_str()) == nullptr ||
+      setlocale(LC_CTYPE, strLocale.c_str()) == nullptr ||
+      setlocale(LC_TIME, strLocale.c_str()) == nullptr)
   {
     strLocale = "C";
     setlocale(LC_COLLATE, strLocale.c_str());
@@ -302,9 +322,9 @@ void CLangInfo::CRegion::SetGlobalLocale()
 #else
   std::wstring strLocaleW;
   g_charsetConverter.utf8ToW(strLocale, strLocaleW);
-  if (_wsetlocale(LC_COLLATE, strLocaleW.c_str()) == NULL ||
-      _wsetlocale(LC_CTYPE, strLocaleW.c_str()) == NULL ||
-      _wsetlocale(LC_TIME, strLocaleW.c_str()) == NULL)
+  if (_wsetlocale(LC_COLLATE, strLocaleW.c_str()) == nullptr ||
+      _wsetlocale(LC_CTYPE, strLocaleW.c_str()) == nullptr ||
+      _wsetlocale(LC_TIME, strLocaleW.c_str()) == nullptr)
   {
     strLocale = "C";
     strLocaleW = L"C";
@@ -339,7 +359,7 @@ CLangInfo::~CLangInfo() = default;
 
 void CLangInfo::OnSettingChanged(const std::shared_ptr<const CSetting>& setting)
 {
-  if (setting == NULL)
+  if (setting == nullptr)
     return;
 
   auto settingsComponent = CServiceBroker::GetSettingsComponent();
@@ -409,17 +429,17 @@ bool CLangInfo::Load(const std::string& strLanguage)
 
   std::string strFileName = GetLanguageInfoPath(strLanguage);
 
-  CXBMCTinyXML xmlDoc;
+  CXBMCTinyXML2 xmlDoc;
   if (!xmlDoc.LoadFile(strFileName))
   {
-    CLog::Log(LOGERROR, "unable to load {}: {} at line {}", strFileName, xmlDoc.ErrorDesc(),
-              xmlDoc.ErrorRow());
+    CLog::Log(LOGERROR, "unable to load {}: {} at line {}", strFileName, xmlDoc.ErrorStr(),
+              xmlDoc.ErrorLineNum());
     return false;
   }
 
   // get the matching language addon
   m_languageAddon = GetLanguageAddon(strLanguage);
-  if (m_languageAddon == NULL)
+  if (m_languageAddon == nullptr)
   {
     CLog::Log(LOGERROR, "Unknown language {}", strLanguage);
     return false;
@@ -434,8 +454,8 @@ bool CLangInfo::Load(const std::string& strLanguage)
   m_strDVDSubtitleLanguage = m_languageAddon->GetDvdSubtitleLanguage();
   m_sortTokens = m_languageAddon->GetSortTokens();
 
-  TiXmlElement* pRootElement = xmlDoc.RootElement();
-  if (pRootElement->ValueStr() != "language")
+  const auto* pRootElement = xmlDoc.RootElement();
+  if (std::string(pRootElement->Value()) != "language")
   {
     CLog::Log(LOGERROR, "{} Doesn't contain <language>", strFileName);
     return false;
@@ -468,10 +488,10 @@ bool CLangInfo::Load(const std::string& strLanguage)
   if (g_LangCodeExpander.ConvertToISO6391(m_defaultRegion.m_strLangLocaleName, tmp))
     m_defaultRegion.m_strLangLocaleCodeTwoChar = tmp;
 
-  const TiXmlNode *pRegions = pRootElement->FirstChild("regions");
+  const auto* pRegions = pRootElement->FirstChildElement("regions");
   if (pRegions && !pRegions->NoChildren())
   {
-    const TiXmlElement *pRegion=pRegions->FirstChildElement("region");
+    const auto* pRegion = pRegions->FirstChildElement("region");
     while (pRegion)
     {
       CRegion region(m_defaultRegion);
@@ -492,15 +512,15 @@ bool CLangInfo::Load(const std::string& strLanguage)
       }
 #endif
 
-      const TiXmlNode *pDateLong=pRegion->FirstChild("datelong");
+      const auto* pDateLong = pRegion->FirstChildElement("datelong");
       if (pDateLong && !pDateLong->NoChildren())
-        region.m_strDateFormatLong=pDateLong->FirstChild()->ValueStr();
+        region.m_strDateFormatLong = pDateLong->FirstChild()->Value();
 
-      const TiXmlNode *pDateShort=pRegion->FirstChild("dateshort");
+      const auto* pDateShort = pRegion->FirstChildElement("dateshort");
       if (pDateShort && !pDateShort->NoChildren())
-        region.m_strDateFormatShort=pDateShort->FirstChild()->ValueStr();
+        region.m_strDateFormatShort = pDateShort->FirstChild()->Value();
 
-      const TiXmlElement *pTime=pRegion->FirstChildElement("time");
+      const auto* pTime = pRegion->FirstChildElement("time");
       if (pTime && !pTime->NoChildren())
       {
         region.m_strTimeFormat=pTime->FirstChild()->Value();
@@ -510,19 +530,19 @@ bool CLangInfo::Load(const std::string& strLanguage)
             XMLUtils::GetAttribute(pTime, "symbolPM");
       }
 
-      const TiXmlNode *pTempUnit=pRegion->FirstChild("tempunit");
+      const auto* pTempUnit = pRegion->FirstChildElement("tempunit");
       if (pTempUnit && !pTempUnit->NoChildren())
-        region.SetTemperatureUnit(pTempUnit->FirstChild()->ValueStr());
+        region.SetTemperatureUnit(pTempUnit->FirstChild()->Value());
 
-      const TiXmlNode *pSpeedUnit=pRegion->FirstChild("speedunit");
+      const auto* pSpeedUnit = pRegion->FirstChildElement("speedunit");
       if (pSpeedUnit && !pSpeedUnit->NoChildren())
-        region.SetSpeedUnit(pSpeedUnit->FirstChild()->ValueStr());
+        region.SetSpeedUnit(pSpeedUnit->FirstChild()->Value());
 
-      const TiXmlNode *pTimeZone=pRegion->FirstChild("timezone");
+      const auto* pTimeZone = pRegion->FirstChildElement("timezone");
       if (pTimeZone && !pTimeZone->NoChildren())
-        region.SetTimeZone(pTimeZone->FirstChild()->ValueStr());
+        region.SetTimeZone(pTimeZone->FirstChild()->Value());
 
-      const TiXmlElement *pThousandsSep = pRegion->FirstChildElement("thousandsseparator");
+      const auto* pThousandsSep = pRegion->FirstChildElement("thousandsseparator");
       if (pThousandsSep)
       {
         if (!pThousandsSep->NoChildren())
@@ -540,7 +560,7 @@ bool CLangInfo::Load(const std::string& strLanguage)
         region.m_strGrouping = "\3";
       }
 
-      const TiXmlElement *pDecimalSep = pRegion->FirstChildElement("decimalseparator");
+      const auto* pDecimalSep = pRegion->FirstChildElement("decimalseparator");
       if (pDecimalSep)
       {
         if (!pDecimalSep->NoChildren())
@@ -551,7 +571,7 @@ bool CLangInfo::Load(const std::string& strLanguage)
 
       m_regions.insert(PAIR_REGIONS(region.m_strName, region));
 
-      pRegion=pRegion->NextSiblingElement("region");
+      pRegion = pRegion->NextSiblingElement("region");
     }
 
     const std::string& strName = CServiceBroker::GetSettingsComponent()->GetSettings()->GetString(CSettings::SETTING_LOCALE_COUNTRY);
@@ -659,40 +679,41 @@ void CLangInfo::SetDefaults()
 
 std::string CLangInfo::GetGuiCharSet() const
 {
-  std::shared_ptr<CSettingString> charsetSetting = std::static_pointer_cast<CSettingString>(CServiceBroker::GetSettingsComponent()->GetSettings()->GetSetting(CSettings::SETTING_LOCALE_CHARSET));
-  if (charsetSetting == NULL || charsetSetting->IsDefault())
-    return m_strGuiCharSet;
+  const auto settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+  const auto setting = settings->GetSetting(CSettings::SETTING_LOCALE_CHARSET);
+  const auto charsetSetting = std::static_pointer_cast<CSettingString>(setting);
 
-  return charsetSetting->GetValue();
+  return charsetSetting->IsDefault() ? m_strGuiCharSet : charsetSetting->GetValue();
 }
 
 std::string CLangInfo::GetSubtitleCharSet() const
 {
-  std::shared_ptr<CSettingString> charsetSetting = std::static_pointer_cast<CSettingString>(CServiceBroker::GetSettingsComponent()->GetSettings()->GetSetting(CSettings::SETTING_SUBTITLES_CHARSET));
-  if (charsetSetting->IsDefault())
-    return m_strSubtitleCharSet;
-
-  return charsetSetting->GetValue();
+  const auto settings = CServiceBroker::GetSettingsComponent()->GetSettings();
+  const auto setting = settings->GetSetting(CSettings::SETTING_SUBTITLES_CHARSET);
+  const auto charsetSetting = std::static_pointer_cast<CSettingString>(setting);
+  return charsetSetting->IsDefault() ? m_strSubtitleCharSet : charsetSetting->GetValue();
 }
 
 void CLangInfo::GetAddonsLanguageCodes(std::map<std::string, std::string>& languages)
 {
   ADDON::VECADDONS addons;
   CServiceBroker::GetAddonMgr().GetAddons(addons, ADDON::AddonType::RESOURCE_LANGUAGE);
-  for (const auto& addon : addons)
-  {
-    const LanguageResourcePtr langAddon =
-        std::dynamic_pointer_cast<ADDON::CLanguageResource>(addon);
-    std::string langCode{langAddon->GetLocale().ToShortStringLC()};
-    StringUtils::Replace(langCode, '_', '-');
-    languages.emplace(langCode, addon->Name());
-  }
+  std::ranges::transform(addons, std::inserter(languages, languages.end()),
+                         [](const auto& addon)
+                         {
+                           const LanguageResourcePtr langAddon =
+                               std::dynamic_pointer_cast<ADDON::CLanguageResource>(addon);
+                           std::string langCode{langAddon->GetLocale().ToShortStringLC()};
+                           StringUtils::Replace(langCode, '_', '-');
+                           return std::pair{std::move(langCode), addon->Name()};
+                         });
 }
 
 LanguageResourcePtr CLangInfo::GetLanguageAddon(const std::string& locale /* = "" */) const
 {
   if (locale.empty() ||
-     (m_languageAddon != NULL && (locale.compare(m_languageAddon->ID()) == 0 || m_languageAddon->GetLocale().Equals(locale))))
+      (m_languageAddon != nullptr &&
+       (locale.compare(m_languageAddon->ID()) == 0 || m_languageAddon->GetLocale().Equals(locale))))
     return m_languageAddon;
 
   std::string addonId = ADDON::CLanguageResource::GetAddonId(locale);
@@ -702,34 +723,35 @@ LanguageResourcePtr CLangInfo::GetLanguageAddon(const std::string& locale /* = "
   ADDON::AddonPtr addon;
   if (CServiceBroker::GetAddonMgr().GetAddon(addonId, addon, ADDON::AddonType::RESOURCE_LANGUAGE,
                                              ADDON::OnlyEnabled::CHOICE_YES) &&
-      addon != NULL)
+      addon != nullptr)
     return std::dynamic_pointer_cast<ADDON::CLanguageResource>(addon);
 
-  return NULL;
+  return nullptr;
 }
 
 std::string CLangInfo::ConvertEnglishNameToAddonLocale(const std::string& langName)
 {
   ADDON::VECADDONS addons;
   CServiceBroker::GetAddonMgr().GetAddons(addons, ADDON::AddonType::RESOURCE_LANGUAGE);
-  for (const auto& addon : addons)
+  const auto it =
+      std::ranges::find_if(addons, [&langName](const auto& addon)
+                           { return StringUtils::CompareNoCase(addon->Name(), langName) == 0; });
+
+  if (it != addons.end())
   {
-    if (StringUtils::CompareNoCase(addon->Name(), langName) == 0)
-    {
-      const LanguageResourcePtr langAddon =
-          std::dynamic_pointer_cast<ADDON::CLanguageResource>(addon);
-      std::string locale = langAddon->GetLocale().ToShortStringLC();
-      StringUtils::Replace(locale, '_', '-');
-      return locale;
-    }
+    const LanguageResourcePtr langAddon = std::dynamic_pointer_cast<ADDON::CLanguageResource>(*it);
+    std::string locale = langAddon->GetLocale().ToShortStringLC();
+    StringUtils::Replace(locale, '_', '-');
+    return locale;
   }
+
   return "";
 }
 
 std::string CLangInfo::GetEnglishLanguageName(const std::string& locale /* = "" */) const
 {
   LanguageResourcePtr addon = GetLanguageAddon(locale);
-  if (addon == NULL)
+  if (addon == nullptr)
     return "";
 
   return addon->Name();
@@ -785,11 +807,13 @@ bool CLangInfo::SetLanguage(std::string language /* = "" */, bool reloadServices
   if (CServiceBroker::GetAddonMgr().GetInstalledAddons(addons))
   {
     const std::string locale = CServiceBroker::GetSettingsComponent()->GetSettings()->GetString(CSettings::SETTING_LOCALE_LANGUAGE);
-    for (const auto& addon : addons)
-    {
-      const std::string path = URIUtils::AddFileToFolder(addon->Path(), "resources", "language/");
-      resources.GetLocalizeStrings().LoadAddonStrings(path, locale, addon->ID());
-    }
+    std::ranges::for_each(addons,
+                          [&resources, &locale](const auto& ad)
+                          {
+                            const std::string path =
+                                URIUtils::AddFileToFolder(ad->Path(), "resources", "language/");
+                            resources.GetLocalizeStrings().LoadAddonStrings(path, locale, ad->ID());
+                          });
   }
 
   if (reloadServices)
@@ -815,9 +839,11 @@ const std::string& CLangInfo::GetAudioLanguage(bool allowFallback) const
 
 void CLangInfo::SetAudioLanguage(const std::string& language, bool isIso6392 /* = false */)
 {
-  if (language.empty() || StringUtils::EqualsNoCase(language, "default") ||
-      StringUtils::EqualsNoCase(language, "original") ||
-      StringUtils::EqualsNoCase(language, "mediadefault"))
+  if (language.empty() || std::ranges::find_if(specialAudioLangSettings,
+                                               [&language](const SpecialLanguageSetting& setting) {
+                                                 return StringUtils::EqualsNoCase(language,
+                                                                                  setting.m_code);
+                                               }) != specialAudioLangSettings.end())
   {
     m_audioLanguage.clear();
     return;
@@ -850,8 +876,11 @@ const std::string& CLangInfo::GetSubtitleLanguage(bool allowFallback) const
 
 void CLangInfo::SetSubtitleLanguage(const std::string& language, bool isIso6392 /* = false */)
 {
-  if (language.empty() || StringUtils::EqualsNoCase(language, "default") ||
-      StringUtils::EqualsNoCase(language, "original"))
+  if (language.empty() || std::ranges::find_if(specialSubtitlesLangSettings,
+                                               [&language](const SpecialLanguageSetting& setting) {
+                                                 return StringUtils::EqualsNoCase(language,
+                                                                                  setting.m_code);
+                                               }) != specialSubtitlesLangSettings.end())
   {
     m_subtitleLanguage.clear();
     return;
@@ -907,10 +936,7 @@ const std::string CLangInfo::GetDVDSubtitleLanguage() const
 const CLocale& CLangInfo::GetLocale() const
 {
   LanguageResourcePtr language = GetLanguageAddon();
-  if (language != NULL)
-    return language->GetLocale();
-
-  return CLocale::Empty;
+  return language != nullptr ? language->GetLocale() : CLocale::Empty;
 }
 
 const std::string& CLangInfo::GetRegionLocale() const
@@ -926,10 +952,7 @@ const std::locale& CLangInfo::GetOriginalLocale() const
 // Returns the format string for the date of the current language
 const std::string& CLangInfo::GetDateFormat(bool bLongDate /* = false */) const
 {
-  if (bLongDate)
-    return GetLongDateFormat();
-
-  return GetShortDateFormat();
+  return bLongDate ? GetLongDateFormat() : GetShortDateFormat();
 }
 
 void CLangInfo::SetDateFormat(const std::string& dateFormat, bool bLongDate /* = false */)
@@ -1047,16 +1070,15 @@ const std::string& CLangInfo::MeridiemSymbolToString(MeridiemSymbol symbol)
 }
 
 // Fills the array with the region names available for this language
-void CLangInfo::GetRegionNames(std::vector<std::string>& array)
+void CLangInfo::GetRegionNames(std::vector<std::string>& array) const
 {
-  for (const auto &region : m_regions)
-  {
-    std::string strName=region.first;
-    if (strName=="N/A")
-      strName =
-          CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(10005); // Not available
-    array.emplace_back(std::move(strName));
-  }
+  std::ranges::transform(m_regions, std::back_inserter(array),
+                         [&rc = CServiceBroker::GetResourcesComponent()](const auto& region)
+                         {
+                           return region.first == "N/A"
+                                      ? rc.GetLocalizeStrings().Get(10005) // Not available
+                                      : region.first;
+                         });
 }
 
 // Set the current region by its name, names from GetRegionNames() are valid.
@@ -1071,7 +1093,7 @@ void CLangInfo::SetCurrentRegion(const std::string& strName)
   else
     m_currentRegion=&m_defaultRegion;
 
-  m_currentRegion->SetGlobalLocale();
+  m_currentRegion->SetGlobalLocale(*this);
 
   const std::shared_ptr<CSettings> settings = CServiceBroker::GetSettingsComponent()->GetSettings();
   if (settings->GetString(CSettings::SETTING_LOCALE_SHORTDATEFORMAT) == SETTING_REGIONAL_DEFAULT)
@@ -1119,13 +1141,9 @@ void CLangInfo::SetTemperatureUnit(CTemperature::Unit temperatureUnit)
 
 void CLangInfo::SetTemperatureUnit(const std::string& temperatureUnit)
 {
-  CTemperature::Unit unit = CTemperature::UnitCelsius;
-  if (temperatureUnit == SETTING_REGIONAL_DEFAULT)
-    unit = m_currentRegion->m_tempUnit;
-  else
-    unit = StringToTemperatureUnit(temperatureUnit);
-
-  SetTemperatureUnit(unit);
+  SetTemperatureUnit(temperatureUnit == SETTING_REGIONAL_DEFAULT
+                         ? m_currentRegion->m_tempUnit
+                         : StringToTemperatureUnit(temperatureUnit));
 }
 
 std::string CLangInfo::GetTemperatureAsString(const CTemperature& temperature) const
@@ -1165,13 +1183,8 @@ void CLangInfo::SetSpeedUnit(CSpeed::Unit speedUnit)
 
 void CLangInfo::SetSpeedUnit(const std::string& speedUnit)
 {
-  CSpeed::Unit unit = CSpeed::UnitKilometresPerHour;
-  if (speedUnit == SETTING_REGIONAL_DEFAULT)
-    unit = m_currentRegion->m_speedUnit;
-  else
-    unit = StringToSpeedUnit(speedUnit);
-
-  SetSpeedUnit(unit);
+  SetSpeedUnit(speedUnit == SETTING_REGIONAL_DEFAULT ? m_currentRegion->m_speedUnit
+                                                     : StringToSpeedUnit(speedUnit));
 }
 
 CSpeed::Unit CLangInfo::GetSpeedUnit() const
@@ -1249,8 +1262,8 @@ void CLangInfo::SettingOptionsLanguageNamesFiller(const SettingConstPtr& /*setti
   if (!CServiceBroker::GetAddonMgr().GetAddons(addons, ADDON::AddonType::RESOURCE_LANGUAGE))
     return;
 
-  for (const auto &addon : addons)
-    list.emplace_back(addon->Name(), addon->Name());
+  std::ranges::transform(addons, std::back_inserter(list), [](const auto& addon)
+                         { return StringSettingOption{addon->Name(), addon->Name()}; });
 
   sort(list.begin(), list.end(), SortLanguage());
 }
@@ -1262,20 +1275,20 @@ void CLangInfo::SettingOptionsISO6391LanguagesFiller(const SettingConstPtr& /*se
   std::vector<std::string> languages = g_LangCodeExpander.GetLanguageNames(
       CLangCodeExpander::ISO_639_1, CLangCodeExpander::LANG_LIST::INCLUDE_USERDEFINED);
 
-  for (const auto &language : languages)
-    list.emplace_back(language, language);
+  std::ranges::transform(languages, std::back_inserter(list), [](const auto& language)
+                         { return StringSettingOption{language, language}; });
 }
 
 void CLangInfo::SettingOptionsAudioStreamLanguagesFiller(const SettingConstPtr& /*setting*/,
                                                          std::vector<StringSettingOption>& list,
                                                          std::string& /*current*/)
 {
-  list.emplace_back(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(307),
-                    "mediadefault");
-  list.emplace_back(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(308),
-                    "original");
-  list.emplace_back(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(309),
-                    "default");
+  for (const auto& special : specialAudioLangSettings)
+  {
+    list.emplace_back(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(special.m_message),
+        std::string{special.m_code});
+  }
 
   AddLanguages(list);
 }
@@ -1284,13 +1297,12 @@ void CLangInfo::SettingOptionsSubtitleStreamLanguagesFiller(const SettingConstPt
                                                             std::vector<StringSettingOption>& list,
                                                             std::string& /*current*/)
 {
-  list.emplace_back(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(231), "none");
-  list.emplace_back(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(13207),
-                    "forced_only");
-  list.emplace_back(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(308),
-                    "original");
-  list.emplace_back(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(309),
-                    "default");
+  for (const auto& special : specialSubtitlesLangSettings)
+  {
+    list.emplace_back(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(special.m_message),
+        std::string{special.m_code});
+  }
 
   AddLanguages(list);
 }
@@ -1300,20 +1312,23 @@ void CLangInfo::SettingOptionsSubtitleDownloadlanguagesFiller(
     std::vector<StringSettingOption>& list,
     std::string& /*current*/)
 {
-  list.emplace_back(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(308),
-                    "original");
-  list.emplace_back(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(309),
-                    "default");
+  for (const auto& special : specialSubtitlesDownloadLangSettings)
+  {
+    list.emplace_back(
+        CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(special.m_message),
+        std::string{special.m_code});
+  }
 
   AddLanguages(list);
 }
 
 void CLangInfo::SettingOptionsRegionsFiller(const SettingConstPtr& setting,
                                             std::vector<StringSettingOption>& list,
-                                            std::string& current)
+                                            std::string& current,
+                                            const CLangInfo& langInfo)
 {
   std::vector<std::string> regions;
-  g_langInfo.GetRegionNames(regions);
+  langInfo.GetRegionNames(regions);
   std::sort(regions.begin(), regions.end(), sortstringbyname());
 
   bool match = false;
@@ -1335,7 +1350,8 @@ void CLangInfo::SettingOptionsRegionsFiller(const SettingConstPtr& setting,
 
 void CLangInfo::SettingOptionsShortDateFormatsFiller(const SettingConstPtr& setting,
                                                      std::vector<StringSettingOption>& list,
-                                                     std::string& current)
+                                                     std::string& current,
+                                                     const CLangInfo& langInfo)
 {
   bool match = false;
   const std::string& shortDateFormatSetting = std::static_pointer_cast<const CSettingString>(setting)->GetValue();
@@ -1345,7 +1361,7 @@ void CLangInfo::SettingOptionsShortDateFormatsFiller(const SettingConstPtr& sett
   list.emplace_back(
       StringUtils::Format(
           CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20035),
-          GetDateStringWithFormat(now, g_langInfo.m_currentRegion->m_strDateFormatShort)),
+          GetDateStringWithFormat(now, langInfo.m_currentRegion->m_strDateFormatShort)),
       SETTING_REGIONAL_DEFAULT);
 
   if (shortDateFormatSetting == SETTING_REGIONAL_DEFAULT)
@@ -1371,7 +1387,8 @@ void CLangInfo::SettingOptionsShortDateFormatsFiller(const SettingConstPtr& sett
 
 void CLangInfo::SettingOptionsLongDateFormatsFiller(const SettingConstPtr& setting,
                                                     std::vector<StringSettingOption>& list,
-                                                    std::string& current)
+                                                    std::string& current,
+                                                    const CLangInfo& langInfo)
 {
   bool match = false;
   const std::string& longDateFormatSetting = std::static_pointer_cast<const CSettingString>(setting)->GetValue();
@@ -1381,7 +1398,7 @@ void CLangInfo::SettingOptionsLongDateFormatsFiller(const SettingConstPtr& setti
   list.emplace_back(
       StringUtils::Format(
           CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20035),
-          GetDateStringWithFormat(now, g_langInfo.m_currentRegion->m_strDateFormatLong)),
+          GetDateStringWithFormat(now, langInfo.m_currentRegion->m_strDateFormatLong)),
       SETTING_REGIONAL_DEFAULT);
 
   if (longDateFormatSetting == SETTING_REGIONAL_DEFAULT)
@@ -1407,17 +1424,18 @@ void CLangInfo::SettingOptionsLongDateFormatsFiller(const SettingConstPtr& setti
 
 void CLangInfo::SettingOptionsTimeFormatsFiller(const SettingConstPtr& setting,
                                                 std::vector<StringSettingOption>& list,
-                                                std::string& current)
+                                                std::string& current,
+                                                const CLangInfo& langInfo)
 {
   bool match = false;
   const std::string& timeFormatSetting = std::static_pointer_cast<const CSettingString>(setting)->GetValue();
 
   CDateTime now = CDateTime::GetCurrentDateTime();
-  bool use24hourFormat = g_langInfo.Use24HourClock();
+  bool use24hourFormat = langInfo.Use24HourClock();
 
   list.emplace_back(
       StringUtils::Format(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20035),
-                          ToSettingTimeFormat(now, g_langInfo.m_currentRegion->m_strTimeFormat)),
+                          ToSettingTimeFormat(now, langInfo.m_currentRegion->m_strTimeFormat)),
       SETTING_REGIONAL_DEFAULT);
   if (timeFormatSetting == SETTING_REGIONAL_DEFAULT)
   {
@@ -1480,13 +1498,16 @@ void CLangInfo::SettingOptionsTimeFormatsFiller(const SettingConstPtr& setting,
 
 void CLangInfo::SettingOptions24HourClockFormatsFiller(const SettingConstPtr& setting,
                                                        std::vector<StringSettingOption>& list,
-                                                       std::string& current)
+                                                       std::string& current,
+                                                       const CLangInfo& langInfo)
 {
   bool match = false;
   const std::string& clock24HourFormatSetting = std::static_pointer_cast<const CSettingString>(setting)->GetValue();
 
   // determine the 24-hour clock format of the regional setting
-  int regionalClock24HourFormatLabel = DetermineUse24HourClockFromTimeFormat(g_langInfo.m_currentRegion->m_strTimeFormat) ? 12384 : 12383;
+  int regionalClock24HourFormatLabel =
+      DetermineUse24HourClockFromTimeFormat(langInfo.m_currentRegion->m_strTimeFormat) ? 12384
+                                                                                       : 12383;
   list.emplace_back(
       StringUtils::Format(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20035),
                           CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(
@@ -1514,20 +1535,21 @@ void CLangInfo::SettingOptions24HourClockFormatsFiller(const SettingConstPtr& se
     match = true;
   }
 
-  if (!match && !list.empty())
+  if (!match)
     current = list[0].value;
 }
 
 void CLangInfo::SettingOptionsTemperatureUnitsFiller(const SettingConstPtr& setting,
                                                      std::vector<StringSettingOption>& list,
-                                                     std::string& current)
+                                                     std::string& current,
+                                                     const CLangInfo& langInfo)
 {
   bool match = false;
   const std::string& temperatureUnitSetting = std::static_pointer_cast<const CSettingString>(setting)->GetValue();
 
   list.emplace_back(
       StringUtils::Format(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20035),
-                          GetTemperatureUnitString(g_langInfo.m_currentRegion->m_tempUnit)),
+                          GetTemperatureUnitString(langInfo.m_currentRegion->m_tempUnit)),
       SETTING_REGIONAL_DEFAULT);
   if (temperatureUnitSetting == SETTING_REGIONAL_DEFAULT)
   {
@@ -1552,14 +1574,15 @@ void CLangInfo::SettingOptionsTemperatureUnitsFiller(const SettingConstPtr& sett
 
 void CLangInfo::SettingOptionsSpeedUnitsFiller(const SettingConstPtr& setting,
                                                std::vector<StringSettingOption>& list,
-                                               std::string& current)
+                                               std::string& current,
+                                               const CLangInfo& langInfo)
 {
   bool match = false;
   const std::string& speedUnitSetting = std::static_pointer_cast<const CSettingString>(setting)->GetValue();
 
   list.emplace_back(
       StringUtils::Format(CServiceBroker::GetResourcesComponent().GetLocalizeStrings().Get(20035),
-                          GetSpeedUnitString(g_langInfo.m_currentRegion->m_speedUnit)),
+                          GetSpeedUnitString(langInfo.m_currentRegion->m_speedUnit)),
       SETTING_REGIONAL_DEFAULT);
   if (speedUnitSetting == SETTING_REGIONAL_DEFAULT)
   {
@@ -1587,6 +1610,6 @@ void CLangInfo::AddLanguages(std::vector<StringSettingOption> &list)
   std::vector<std::string> languages = g_LangCodeExpander.GetLanguageNames(
       CLangCodeExpander::ISO_639_1, CLangCodeExpander::LANG_LIST::INCLUDE_ADDONS_USERDEFINED);
 
-  for (const auto& language : languages)
-    list.emplace_back(language, language);
+  std::ranges::transform(languages, std::back_inserter(list), [](const auto& language)
+                         { return StringSettingOption{language, language}; });
 }

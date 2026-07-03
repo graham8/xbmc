@@ -365,10 +365,13 @@ void CFileItemList::Sort(SortDescription sortDescription)
             sortDescription.sortBy == SortBy::SORT_TITLE ||
             sortDescription.sortBy == SortBy::ORIGINAL_TITLE ||
             sortDescription.sortBy == SortBy::DATE_ADDED ||
-            sortDescription.sortBy == SortBy::RATING || sortDescription.sortBy == SortBy::YEAR ||
+            sortDescription.sortBy == SortBy::RATING ||
+            sortDescription.sortBy == SortBy::USER_RATING ||
+            sortDescription.sortBy == SortBy::MPAA || sortDescription.sortBy == SortBy::YEAR ||
             sortDescription.sortBy == SortBy::PLAYLIST_ORDER ||
             sortDescription.sortBy == SortBy::LAST_PLAYED ||
-            sortDescription.sortBy == SortBy::PLAYCOUNT) ||
+            sortDescription.sortBy == SortBy::PLAYCOUNT ||
+            sortDescription.sortBy == SortBy::TIME) ||
            m_sortIgnoreFolders)
   {
     sortDescription.sortAttributes =
@@ -381,7 +384,7 @@ void CFileItemList::Sort(SortDescription sortDescription)
   {
     sortItems[index] = std::make_shared<SortItem>();
     m_items[index]->ToSortable(*sortItems[index], fields);
-    (*sortItems[index])[FieldId] = index;
+    (*sortItems[index])[Field::ID] = index;
   }
 
   // do the sorting
@@ -392,9 +395,10 @@ void CFileItemList::Sort(SortDescription sortDescription)
   sortedFileItems.reserve(Size());
   for (const auto& sortItem : sortItems)
   {
-    std::shared_ptr<CFileItem> item = m_items[static_cast<int>(sortItem->at(FieldId).asInteger())];
+    std::shared_ptr<CFileItem> item =
+        m_items[static_cast<int>(sortItem->at(Field::ID).asInteger())];
     // Set the sort label in the CFileItem
-    item->SetSortLabel(sortItem->at(FieldSort).asWideString());
+    item->SetSortLabel(sortItem->at(Field::SORT).asWideString());
 
     sortedFileItems.emplace_back(std::move(item));
   }

@@ -535,7 +535,7 @@ macro(BUILD_DEP_TARGET)
   set(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND 1)
 
   string(TOUPPER "${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}" _search_upper)
-  set(${_search_upper}_FOUND ON CACHE BOOL "${_search_upper}_FOUND" FORCE)
+  set(${_search_upper}_FOUND 1)
   unset(_search_upper)
 endmacro()
 
@@ -683,11 +683,18 @@ endmacro()
 #
 macro(ADD_TARGET_COMPILE_DEFINITION)
   if(${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_COMPILE_DEFINITIONS)
-    get_target_property(_ALIASTARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME} ALIASED_TARGET)
+
+    if("${${${CMAKE_FIND_PACKAGE_NAME}_MODULE}_TYPE}" STREQUAL "LIBRARY")
+      set(TARGET_NAMESPACE LIBRARY)
+    else()
+      set(TARGET_NAMESPACE ${APP_NAME_LC})
+    endif()
+
+    get_target_property(_ALIASTARGET ${TARGET_NAMESPACE}::${CMAKE_FIND_PACKAGE_NAME} ALIASED_TARGET)
     if(_ALIASTARGET)
       set(LIB_TARGET ${_ALIASTARGET})
     else()
-      set(LIB_TARGET ${APP_NAME_LC}::${CMAKE_FIND_PACKAGE_NAME})
+      set(LIB_TARGET ${TARGET_NAMESPACE}::${CMAKE_FIND_PACKAGE_NAME})
     endif()
 
     set_property(TARGET ${LIB_TARGET} APPEND PROPERTY
@@ -726,7 +733,13 @@ macro(SEARCH_EXISTING_PACKAGES)
     find_package(PkgConfig ${SEARCH_QUIET})
 
     if(PKG_CONFIG_FOUND)
-      pkg_check_modules(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} ${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME_PC}${PC_${CMAKE_FIND_PACKAGE_NAME}_FIND_SPEC} ${SEARCH_QUIET} IMPORTED_TARGET)
+      foreach(_pc_search_name ${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME_PC})
+        pkg_check_modules(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME} ${_pc_search_name}${PC_${CMAKE_FIND_PACKAGE_NAME}_FIND_SPEC} ${SEARCH_QUIET} IMPORTED_TARGET)
+
+        if(${${CMAKE_FIND_PACKAGE_NAME}_SEARCH_NAME}_FOUND)
+          break()
+        endif()
+      endforeach()
     endif()
   endif()
 endmacro()
@@ -827,6 +840,8 @@ function(create_mesonhostmachine)
     set(meson_cpu_family x86_64)
   elseif("${UPPER_C_ARCH}" STREQUAL "X86" OR "${UPPER_C_ARCH}" MATCHES "I.86")
     set(meson_cpu_family x86)
+  elseif("${UPPER_C_ARCH}" MATCHES "WASM")
+    set(meson_cpu_family wasm32)
   endif()
 
   # Non-exhaustive list to map cmake to meson os names
@@ -835,6 +850,8 @@ function(create_mesonhostmachine)
     set(meson_sys_name android)
   elseif(CMAKE_SYSTEM_NAME MATCHES "Darwin")
     set(meson_sys_name darwin)
+  elseif(CMAKE_SYSTEM_NAME MATCHES "Emscripten")
+    set(meson_sys_name emscripten)
   elseif(CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
     set(meson_sys_name freebsd)
   elseif(CMAKE_SYSTEM_NAME MATCHES "Linux")
@@ -863,6 +880,9 @@ endfunction()
 function(create_mesonproperties)
 
   string(APPEND output_string "pkg_config_libdir = '${DEPENDS_PATH}/lib/pkgconfig'\n")
+  if(CMAKE_TOOLCHAIN_FILE)
+    string(APPEND output_string "cmake_toolchain_file = '${CMAKE_TOOLCHAIN_FILE}'\n")
+  endif()
 
   # Easiest to just prepend header at the end of the full string creation
   string(PREPEND output_string "[properties]\n")

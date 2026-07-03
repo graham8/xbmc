@@ -96,6 +96,8 @@ public:
   void ResetAutoScrolling();
   void UpdateAutoScrolling(unsigned int currentTime);
 
+  void UpdateListProvider(bool forceRefresh = false);
+
 #ifdef _DEBUG
   void DumpTextureUse() override;
 #endif
@@ -131,7 +133,6 @@ protected:
   bool InsideLayout(const CGUIListItemLayout *layout, const CPoint &point) const;
   void OnFocus() override;
   void OnUnFocus() override;
-  void UpdateListProvider(bool forceRefresh = false);
 
   int ScrollCorrectionRange() const;
   inline float Size() const;
@@ -231,6 +232,9 @@ protected:
     std::shared_ptr<CGUIListItem> item;
     bool focused;
   };
+
+  // Cached render items to avoid per-frame vector allocation
+  std::vector<RENDERITEM> m_renderItems;
 
 private:
   bool OnContextMenu();

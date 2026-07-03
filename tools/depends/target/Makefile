@@ -18,12 +18,10 @@ DEPENDS = \
   gnutls \
   gtest \
   harfbuzz \
-  libbluray \
   libffi \
   libgcrypt \
   libgpg-error \
   libjpeg-turbo \
-  liblzo2 \
   libplist \
   libpng \
   libshairplay \
@@ -37,7 +35,6 @@ DEPENDS = \
   pythonmodule-setuptools \
   sqlite3 \
   tinyxml \
-  udfread \
   xz
 
 ifeq ($(ENABLE_GPLV3),yes)
@@ -67,6 +64,12 @@ ifeq ($(OS),android)
   DEPENDS += dummy-libxbmc libdovi libuuid
   PYMODULE_DEPS = dummy-libxbmc
   LIBUUID = libuuid
+endif
+
+ifeq ($(OS),wasm)
+  DEPENDS += libuuid
+  LIBUUID = libuuid
+  EXCLUDED_DEPENDS = libusb samba samba-gplv3 libcdio libcdio-gplv3
 endif
 
 ZLIB=

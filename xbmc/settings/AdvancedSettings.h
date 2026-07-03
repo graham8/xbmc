@@ -20,6 +20,7 @@
 #include <functional>
 #include <map>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -139,8 +140,9 @@ class CAdvancedSettings : public ISettingCallback, public ISettingsHandler
      */
     void UnregisterSettingsLoadedCallback(int handle);
 
-    static void GetCustomTVRegexps(TiXmlElement *pRootElement, SETTINGS_TVSHOWLIST& settings);
-    static void GetCustomRegexps(TiXmlElement *pRootElement, std::vector<std::string> &settings);
+    static void GetCustomTVRegexps(const TiXmlElement* pRootElement, SETTINGS_TVSHOWLIST& settings);
+    static void GetCustomRegexps(const TiXmlElement* pRootElement,
+                                 std::vector<std::string>& settings);
     static void GetCustomExtensions(const TiXmlElement* pRootElement, std::string& extensions);
 
     std::string m_audioDefaultPlayer;
@@ -229,7 +231,7 @@ class CAdvancedSettings : public ISettingCallback, public ISettingsHandler
     bool m_fullScreenOnMovieStart;
     std::string m_cachePath;
     std::string m_videoCleanDateTimeRegExp;
-    std::string m_videoFilenameIdentifierRegExp;
+    std::string m_videoFilenameAttributePairsRegExp;
     std::vector<std::string> m_videoCleanStringRegExps;
     std::vector<std::string> m_videoExcludeFromListingRegExps;
     std::vector<std::string> m_allExcludeFromScanRegExps;
@@ -293,6 +295,7 @@ class CAdvancedSettings : public ISettingCallback, public ISettingsHandler
 
     bool m_bVideoScannerIgnoreErrors;
     int m_iVideoLibraryDateAdded;
+    std::unordered_set<std::string> m_videoScannerMetadataSources;
 
     bool m_caseSensitiveLocalArtMatch{true};
     int m_minimumEpisodePlaylistDuration; // seconds
@@ -423,6 +426,10 @@ class CAdvancedSettings : public ISettingCallback, public ISettingsHandler
     void Clear();
     void SetExtraArtwork(const TiXmlElement* arttypes, std::vector<std::string>& artworkMap) const;
 
+    std::vector<std::string> m_videoStackStrings;
+    std::vector<std::string> m_folderStackStrings;
+
     mutable CCriticalSection m_listCritSection;
     std::map<int, AdvancedSettingsCallback> m_settingsLoadedCallbacks;
+    std::string m_metadataSourcesPriv;
 };

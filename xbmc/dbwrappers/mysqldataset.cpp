@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cstdlib>
 #include <string>
@@ -27,7 +28,7 @@
 #ifdef HAS_MYSQL
 #include <mysql/errmsg.h>
 #elif defined(HAS_MARIADB)
-#include <mariadb/errmsg.h>
+#include <errmsg.h>
 #endif
 
 #ifdef TARGET_POSIX
@@ -38,6 +39,62 @@ namespace
 {
 constexpr int MYSQL_OK = 0;
 constexpr int ER_BAD_DB_ERROR = 1049;
+
+#define DEF_CHARSET "utf8mb4"
+#define DEF_COLLATION "utf8mb4_general_ci"
+constexpr std::string_view SQL_CHARSET_COLLATION =
+    "CHARACTER SET " DEF_CHARSET " COLLATE " DEF_COLLATION;
+
+// MariaDB 10.x version number prefix hack to trick MySQL 5.5 replication slaves into working
+// see https://jira.mariadb.org/browse/MDEV-4088
+constexpr std::string_view MARIADB_10_HACK_PREFIX = "5.5.5-";
+
+// Minimum MySQL and MariaDB versions required for the default large index size needed by utf8mb4
+constexpr std::string_view MIN_MYSQL_STR = "5.7.9";
+constexpr std::string_view MIN_MARIADB_STR = "10.2.5";
+
+struct MySQLDbVersion
+{
+  auto operator<=>(const MySQLDbVersion& other) const = default;
+
+  // the field order is important for the compiler-generated comparison operators
+  unsigned int m_major{0};
+  unsigned int m_minor{0};
+  unsigned int m_patch{0};
+};
+
+MySQLDbVersion VersionNumber(std::string_view str)
+{
+  // Expected format: xx.yy.zz
+  MySQLDbVersion version;
+  const char* end{str.data() + str.size()};
+
+  auto res = std::from_chars(str.data(), end, version.m_major);
+  if (res.ec != std::errc{} || res.ptr == end)
+    return version;
+
+  res = std::from_chars(res.ptr + 1, end, version.m_minor);
+  if (res.ec != std::errc{} || res.ptr == end)
+    return version;
+
+  res = std::from_chars(res.ptr + 1, end, version.m_patch);
+
+  return version;
+}
+
+/*!
+ * \brief Validation of unquoted identifiers
+ * \param id Identifier to validate
+ * \return true = valid, false = not valid
+ */
+bool IsValidIdentifier(std::string_view id)
+{
+  if (id.size() > 64)
+    return false;
+
+  return std::ranges::all_of(id, [](char c)
+                             { return StringUtils::isasciialphanum(c) || c == '_' || c == '$'; });
+}
 } // unnamed namespace
 
 namespace dbiplus
@@ -55,7 +112,6 @@ MysqlDatabase::MysqlDatabase()
   db = "mysql";
   login = "root";
   passwd = "null";
-  default_charset = "";
 }
 
 MysqlDatabase::~MysqlDatabase()
@@ -77,40 +133,29 @@ int MysqlDatabase::status()
 
 int MysqlDatabase::setErr(int err_code, const char* qry)
 {
-  switch (err_code)
+  if (err_code == MYSQL_OK)
   {
-    case MYSQL_OK:
-      error = "Successful result";
-      break;
-    case CR_COMMANDS_OUT_OF_SYNC:
-      error = "Commands were executed in an improper order";
-      break;
-    case CR_SERVER_GONE_ERROR:
-      error = "The MySQL server has gone away";
-      break;
-    case CR_SERVER_LOST:
-      error = "The connection to the server was lost during this query";
-      break;
-    case CR_UNKNOWN_ERROR:
-      error = "An unknown error occurred";
-      break;
-    case 1146: /* ER_NO_SUCH_TABLE */
-      error = "The table does not exist";
-      break;
-    default:
-      error = StringUtils::Format("Undefined MySQL error: Code ({})", err_code);
-      break;
+    error = "Success";
+  }
+  else
+  {
+    const unsigned int err = mysql_errno(conn);
+    if (err != static_cast<unsigned int>(err_code))
+      CLog::LogF(LOGERROR,
+                 "setErr was not called immediately after the error happened (function return code "
+                 "{}, mysql_errno {})",
+                 err_code, err);
+
+    const char* errMsg = mysql_error(conn);
+
+    error = StringUtils::Format("MySQL error {} ({}): {}", err_code, mysql_sqlstate(conn),
+                                *errMsg != 0 ? errMsg : "unknown error");
   }
   error = "[" + db + "] " + error;
   error += "\nQuery: ";
   error += qry;
   error += "\n";
   return err_code;
-}
-
-const char* MysqlDatabase::getErrorMsg()
-{
-  return error.c_str();
 }
 
 void MysqlDatabase::configure_connection()
@@ -161,15 +206,27 @@ int MysqlDatabase::connect(bool create_new)
   if (host.empty() || db.empty())
     return DB_CONNECTION_NONE;
 
-  std::string resolvedHost;
-  if (!StringUtils::EqualsNoCase(host, "localhost") &&
-      CServiceBroker::GetDNSNameCache()->Lookup(host, resolvedHost))
+  if (!StringUtils::EqualsNoCase(host, "localhost"))
   {
-    if (host != resolvedHost)
-      CLog::LogF(LOGDEBUG, "Replacing configured host {} with resolved host {}", host,
-                 resolvedHost);
+    std::string resolvedHost;
 
-    host = resolvedHost;
+    if (!CServiceBroker::GetDNSNameCache()->Lookup(host, resolvedHost))
+      return DB_CONNECTION_NONE;
+
+    if (host != resolvedHost)
+    {
+      static std::string lastHost;
+      static std::string lastResolvedHost;
+
+      if (host != lastHost || resolvedHost != lastResolvedHost)
+      {
+        CLog::LogF(LOGDEBUG, "Replacing configured host {} with resolved host {}", host,
+                   resolvedHost);
+        lastHost = host;
+        lastResolvedHost = resolvedHost;
+      }
+      host = resolvedHost;
+    }
   }
 
   try
@@ -200,37 +257,44 @@ int MysqlDatabase::connect(bool create_new)
       static bool showed_ver_info = false;
       if (!showed_ver_info)
       {
-        std::string version_string = mysql_get_server_info(conn);
-        CLog::Log(LOGINFO, "MYSQL: Connected to version {}", version_string);
-        showed_ver_info = true;
-        unsigned long version = mysql_get_server_version(conn);
-        // Minimum for MySQL: 5.6 (5.5 is EOL)
-        unsigned long min_version = 50600;
-        if (version_string.find("MariaDB") != std::string::npos)
-        {
-          // Minimum for MariaDB: 5.5 (still supported)
-          min_version = 50500;
-        }
+        CLog::Log(LOGINFO, "MYSQL: client library {}", mysql_get_client_info());
 
-        if (version < min_version)
+        std::string versionString = mysql_get_server_info(conn);
+        CLog::Log(LOGINFO, "MYSQL: Connected to version {}", versionString);
+        showed_ver_info = true;
+
+        // Undo MariaDB 10.x version string hack - remove the prefix
+        if (versionString.starts_with(MARIADB_10_HACK_PREFIX))
+          versionString = versionString.substr(MARIADB_10_HACK_PREFIX.size());
+
+        const MySQLDbVersion version = VersionNumber(versionString);
+
+        CLog::LogF(LOGDEBUG, "server version interpreted as {}.{}.{}", version.m_major,
+                   version.m_minor, version.m_patch);
+
+        const std::string_view minVersionString =
+            versionString.find("MariaDB") != std::string::npos ? MIN_MARIADB_STR : MIN_MYSQL_STR;
+        const MySQLDbVersion minVersion = VersionNumber(minVersionString);
+
+        if (version < minVersion)
         {
-          CLog::Log(
-              LOGWARNING,
-              "MYSQL: Your database server version {} is very old and might not be supported in "
-              "future Kodi versions. Please consider upgrading to MySQL 5.7 or MariaDB 10.2.",
-              version_string);
+          CLog::Log(LOGERROR,
+                    "MYSQL: Your database server version {} is very old. Kodi requires at least "
+                    "MySQL {} or MariaDB {}.",
+                    versionString, MIN_MYSQL_STR, MIN_MARIADB_STR);
+
+          throw DbErrors("database server version %s is too old", versionString.c_str());
         }
       }
 
       // disable mysql autocommit since we handle it
       //mysql_autocommit(conn, false);
 
-      // enforce utf8 charset usage
-      default_charset = mysql_character_set_name(conn);
-      if (mysql_set_character_set(conn, "utf8")) // returns 0 on success
+      // enforce charset usage
+      if (mysql_set_character_set(conn, DEF_CHARSET)) // returns 0 on success
       {
-        CLog::Log(LOGERROR, "Unable to set utf8 charset: {} [{}]({})", db, mysql_errno(conn),
-                  mysql_error(conn));
+        CLog::Log(LOGERROR, "Unable to set {} charset: {} [{}]({})", DEF_CHARSET, db,
+                  mysql_errno(conn), mysql_error(conn));
       }
 
       configure_connection();
@@ -242,8 +306,8 @@ int MysqlDatabase::connect(bool create_new)
       }
       else if (create_new)
       {
-        const std::string sqlcmd{StringUtils::Format(
-            "CREATE DATABASE `{}` CHARACTER SET utf8 COLLATE utf8_general_ci", db)};
+        const std::string sqlcmd{
+            StringUtils::Format("CREATE DATABASE `{}` {}", db, SQL_CHARSET_COLLATION)};
         const int ret = query_with_reconnect(sqlcmd.c_str());
         if (ret != MYSQL_OK)
         {
@@ -344,8 +408,7 @@ int MysqlDatabase::copy(const char* backup_name)
     }
 
     // create the new database
-    sqlcmd = StringUtils::Format("CREATE DATABASE `{}` CHARACTER SET utf8 COLLATE utf8_general_ci",
-                                 backup_name);
+    sqlcmd = StringUtils::Format("CREATE DATABASE `{}` {}", backup_name, SQL_CHARSET_COLLATION);
     ret = query_with_reconnect(sqlcmd.c_str());
     if (ret != MYSQL_OK)
     {
@@ -358,8 +421,14 @@ int MysqlDatabase::copy(const char* backup_name)
     // duplicate each table from old db to new db
     while ((row = mysql_fetch_row(res)) != nullptr)
     {
+      if (!IsValidIdentifier(row[0]))
+      {
+        CLog::LogF(LOGERROR, "Invalid table name {} - skipped.", row[0]);
+        continue;
+      }
+
       // copy the table definition
-      sqlcmd = StringUtils::Format("CREATE TABLE `{}`.{} LIKE {}", backup_name, row[0], row[0]);
+      sqlcmd = StringUtils::Format("CREATE TABLE `{}`.`{}` LIKE `{}`", backup_name, row[0], row[0]);
       ret = query_with_reconnect(sqlcmd.c_str());
       if (ret != MYSQL_OK)
       {
@@ -367,9 +436,20 @@ int MysqlDatabase::copy(const char* backup_name)
         throw DbErrors("Can't copy schema for table '%s' (%d)", row[0], ret);
       }
 
+      // copied tables inherit the charset and collation of the original.
+      // set the character set and collation of the table (including current and future columns)
+      sqlcmd = StringUtils::Format("ALTER TABLE `{}`.{} CONVERT TO {}", backup_name, row[0],
+                                   SQL_CHARSET_COLLATION);
+      ret = query_with_reconnect(sqlcmd.c_str());
+      if (ret != MYSQL_OK)
+      {
+        mysql_free_result(res);
+        throw DbErrors("Can't set character set and collation for table '%s' (%d)", row[0], ret);
+      }
+
       // copy the table data
-      sqlcmd =
-          StringUtils::Format("INSERT INTO `{}`.{} SELECT * FROM {}", backup_name, row[0], row[0]);
+      sqlcmd = StringUtils::Format("INSERT INTO `{}`.`{}` SELECT * FROM `{}`", backup_name, row[0],
+                                   row[0]);
       ret = query_with_reconnect(sqlcmd.c_str());
       if (ret != MYSQL_OK)
       {
@@ -415,7 +495,7 @@ int MysqlDatabase::drop_analytics()
   {
     while ((row = mysql_fetch_row(res)) != nullptr)
     {
-      sqlcmd = StringUtils::Format("ALTER TABLE `{}`.{} DROP INDEX {}", db, row[0], row[1]);
+      sqlcmd = StringUtils::Format("ALTER TABLE `{}`.`{}` DROP INDEX `{}`", db, row[0], row[1]);
       ret = query_with_reconnect(sqlcmd.c_str());
 
       if (ret != MYSQL_OK)
@@ -443,7 +523,7 @@ int MysqlDatabase::drop_analytics()
     while ((row = mysql_fetch_row(res)) != nullptr)
     {
       /* we do not need IF EXISTS because these views are exist */
-      sqlcmd = StringUtils::Format("DROP VIEW `{}`.{}", db, row[0]);
+      sqlcmd = StringUtils::Format("DROP VIEW `{}`.`{}`", db, row[0]);
       ret = query_with_reconnect(sqlcmd.c_str());
       if (ret != MYSQL_OK)
       {
@@ -469,7 +549,7 @@ int MysqlDatabase::drop_analytics()
   {
     while ((row = mysql_fetch_row(res)) != nullptr)
     {
-      sqlcmd = StringUtils::Format("DROP TRIGGER `{}`.{}", db, row[0]);
+      sqlcmd = StringUtils::Format("DROP TRIGGER `{}`.`{}`", db, row[0]);
       ret = query_with_reconnect(sqlcmd.c_str());
       if (ret != MYSQL_OK)
       {
@@ -496,7 +576,7 @@ int MysqlDatabase::drop_analytics()
   {
     while ((row = mysql_fetch_row(res)) != nullptr)
     {
-      sqlcmd = StringUtils::Format("DROP FUNCTION `{}`.{}", db, row[0]);
+      sqlcmd = StringUtils::Format("DROP FUNCTION `{}`.`{}`", db, row[0]);
       ret = query_with_reconnect(sqlcmd.c_str());
       if (ret != MYSQL_OK)
       {
@@ -540,9 +620,9 @@ long MysqlDatabase::nextid(const char* sname)
   int id;
   std::string sqlcmd{
       StringUtils::Format("SELECT nextid FROM {} WHERE seq_name = '{}'", seq_table, sname)};
-  last_err = query_with_reconnect(sqlcmd.c_str());
+  int err = query_with_reconnect(sqlcmd.c_str());
   CLog::LogFC(LOGDEBUG, LOGDATABASE, "will request");
-  if (last_err != 0)
+  if (err != 0)
   {
     return DB_UNEXPECTED_RESULT;
   }
@@ -555,8 +635,8 @@ long MysqlDatabase::nextid(const char* sname)
       sqlcmd = StringUtils::Format("INSERT INTO {} (nextid,seq_name) VALUES ({},'{}')", seq_table,
                                    id, sname);
       mysql_free_result(res);
-      last_err = query_with_reconnect(sqlcmd.c_str());
-      if (last_err != 0)
+      err = query_with_reconnect(sqlcmd.c_str());
+      if (err != 0)
         return DB_UNEXPECTED_RESULT;
 
       return id;
@@ -567,8 +647,8 @@ long MysqlDatabase::nextid(const char* sname)
       sqlcmd = StringUtils::Format("UPDATE {} SET nextid=%d WHERE seq_name = '{}'", seq_table, id,
                                    sname);
       mysql_free_result(res);
-      last_err = query_with_reconnect(sqlcmd.c_str());
-      if (last_err != 0)
+      err = query_with_reconnect(sqlcmd.c_str());
+      if (err != 0)
         return DB_UNEXPECTED_RESULT;
 
       return id;
@@ -733,7 +813,7 @@ std::string MysqlDatabase::vprepare(std::string_view format, va_list args)
   }
 
   // Remove COLLATE NOCASE the SQLite case insensitive collation.
-  // In MySQL all tables are defined with case insensitive collation utf8_general_ci
+  // In MySQL all tables are defined with case insensitive collation utf8mb4_general_ci
   pos = 0;
   static std::string_view collateNoCase = " COLLATE NOCASE";
   while ((pos = strResult.find(collateNoCase, pos)) != std::string::npos)
@@ -1739,7 +1819,7 @@ void MysqlDataset::make_query(StringList& _sql)
       Dataset::parse_sql(query);
       if ((static_cast<MysqlDatabase*>(db)->query_with_reconnect(query.c_str())) != MYSQL_OK)
       {
-        throw DbErrors(db->getErrorMsg());
+        throw DbErrors("%s", db->getErrorMsg());
       }
     } // end of for
 
@@ -1828,7 +1908,7 @@ bool MysqlDataset::dropIndex(const char* table, const char* index)
 
   if (num_rows())
   {
-    sql = "ALTER TABLE %s DROP INDEX %s";
+    sql = "ALTER TABLE `%s` DROP INDEX `%s`";
     sql_prepared = static_cast<MysqlDatabase*>(db)->prepare(sql.c_str(), table, index);
 
     if (exec(sql_prepared) != MYSQL_OK)
@@ -1854,25 +1934,6 @@ int MysqlDataset::exec(const std::string& sql)
     qry = qry.insert(loc + 19, " auto_increment ");
   }
 
-  // force the charset and collation to UTF-8
-  if (ci_find(qry, "CREATE TABLE") != std::string::npos ||
-      ci_find(qry, "CREATE TEMPORARY TABLE") != std::string::npos)
-  {
-    // If CREATE TABLE ... SELECT Syntax is used we need to add the encoding after the table before the select
-    // e.g. CREATE TABLE x CHARACTER SET utf8 COLLATE utf8_general_ci [AS] SELECT * FROM y
-    loc = qry.find(" AS SELECT ");
-    if (loc == std::string::npos)
-    {
-      loc = qry.find(" SELECT ");
-    }
-    if (loc != std::string::npos)
-    {
-      qry = qry.insert(loc, " CHARACTER SET utf8 COLLATE utf8_general_ci");
-    }
-    else
-      qry += " CHARACTER SET utf8 COLLATE utf8_general_ci";
-  }
-
   const auto start = std::chrono::steady_clock::now();
 
   const int res =
@@ -1885,7 +1946,7 @@ int MysqlDataset::exec(const std::string& sql)
 
   if (res != MYSQL_OK)
   {
-    throw DbErrors(db->getErrorMsg());
+    throw DbErrors("%s", db->getErrorMsg());
   }
   else
   {
@@ -1926,7 +1987,7 @@ bool MysqlDataset::query(const std::string& query)
   if (static_cast<MysqlDatabase*>(db)->setErr(
           static_cast<MysqlDatabase*>(db)->query_with_reconnect(qry.c_str()), qry.c_str()) !=
       MYSQL_OK)
-    throw DbErrors(db->getErrorMsg());
+    throw DbErrors("%s", db->getErrorMsg());
 
   MYSQL* conn = handle();
   stmt = mysql_store_result(conn);

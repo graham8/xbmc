@@ -851,7 +851,10 @@ void CApplication::Render()
     return;
 
   // render gui layer
-  if (appPower->GetRenderGUI() && !m_skipGuiRender)
+  const bool guiWillRender = appPower->GetRenderGUI() && !m_skipGuiRender;
+  bool compositing = CServiceBroker::GetWinSystem()->BeginGuiComposite(guiWillRender);
+
+  if (guiWillRender)
   {
     if (CServiceBroker::GetWinSystem()->GetGfxContext().GetStereoMode() != RenderStereoMode::OFF)
     {
@@ -875,8 +878,14 @@ void CApplication::Render()
     m_lastRenderTime = std::chrono::steady_clock::now();
   }
 
+  if (compositing)
+    CServiceBroker::GetWinSystem()->EndGuiComposite();
+
   // render video layer
   CServiceBroker::GetGUI()->GetWindowManager().RenderEx();
+
+  if (compositing)
+    CServiceBroker::GetWinSystem()->CompositeGui();
 
   CServiceBroker::GetRenderSystem()->EndRender();
 
@@ -896,6 +905,42 @@ void CApplication::Render()
                                                        appPlayer->IsRenderingVideoLayer());
 
   CTimeUtils::UpdateFrameTime(hasRendered);
+
+  // [debug hack] count gui-on-screen frames vs total played and skipped
+  {
+    static unsigned int s_video = 0;
+    static unsigned int s_ctrls = 0;
+    static unsigned int s_subs = 0;
+    static unsigned int s_skipGui = 0;
+    static unsigned int s_skipAny = 0;
+    if (!appPlayer->IsPlayingVideo())
+    {
+      s_video = 0;
+      s_ctrls = 0;
+      s_subs = 0;
+      s_skipGui = 0;
+      s_skipAny = 0;
+    }
+    else
+    {
+      ++s_video;
+      const bool ctrlsOn = CServiceBroker::GetGUI()->GetWindowManager().HasVisibleControls();
+      const bool subsOn = appPlayer->HasVisibleOverlay();
+      if (ctrlsOn)
+        ++s_ctrls;
+      if (subsOn)
+        ++s_subs;
+      if (m_skipGuiRender)
+      {
+        ++s_skipAny;
+        if (ctrlsOn || subsOn)
+          ++s_skipGui;
+      }
+      if (s_video % 240 == 0)
+        CLog::Log(LOGDEBUG, "TEMP: [framecount] video={} ctrls={} subs={} skip-gui={} skip-any={}",
+                  s_video, s_ctrls, s_subs, s_skipGui, s_skipAny);
+    }
+  }
 }
 
 bool CApplication::OnAction(const CAction &action)
@@ -1539,10 +1584,14 @@ void CApplication::FrameMove(bool processEvents, bool processGUI)
     }
 
     if (!m_bStop)
-    {
-      if (!m_skipGuiRender)
-        CServiceBroker::GetGUI()->GetWindowManager().Process(CTimeUtils::GetFrameTime());
-    }
+      CServiceBroker::GetGUI()->GetWindowManager().Process(CTimeUtils::GetFrameTime());
+
+    // Dirty-driven skip: on paths with a persistent framebuffer (D2P plane or
+    // HDR GUI compositing FBO), skip Render when no controls dirtied themselves
+    // this frame. The persistence keeps the previous OSD on screen for free.
+    if (!m_skipGuiRender && appPlayer->IsRenderingVideoLayer() &&
+        !CServiceBroker::GetGUI()->GetWindowManager().HasDirtyRegions())
+      m_skipGuiRender = true;
     CServiceBroker::GetGUI()->GetWindowManager().FrameMove();
   }
 
@@ -1791,9 +1840,12 @@ bool CApplication::Stop(int exitCode)
     // either a bug in core or misbehaving addons. so try saving
     // skin settings early
     CLog::Log(LOGINFO, "Saving skin settings");
-    auto skin = CServiceBroker::GetGUI()->GetSkinInfo();
-    if (skin)
-      skin->SaveSettings();
+    if (CGUIComponent* gui = CServiceBroker::GetGUI())
+    {
+      auto skin = gui->GetSkinInfo();
+      if (skin)
+        skin->SaveSettings();
+    }
 
     m_bStop = true;
     // Add this here to keep the same ordering behaviour for now
@@ -1844,8 +1896,7 @@ bool CApplication::Stop(int exitCode)
     appListener->UnregisterActionListener(&GetComponent<CApplicationPlayer>()->GetSeekHandler());
     appListener->UnregisterActionListener(&CPlayerController::GetInstance());
 
-    CGUIComponent *gui = CServiceBroker::GetGUI();
-    if (gui)
+    if (CGUIComponent* gui = CServiceBroker::GetGUI())
       gui->GetAudioManager().DeInitialize();
 
     // shutdown the AudioEngine
@@ -1873,23 +1924,24 @@ namespace
 class CCreateAndLoadPlayList : public IRunnable
 {
 public:
-  CCreateAndLoadPlayList(CFileItem& item, std::unique_ptr<PLAYLIST::CPlayList>& playlist)
-    : m_item(item), m_playlist(playlist)
+  CCreateAndLoadPlayList(const CFileItem& item, std::unique_ptr<PLAYLIST::CPlayList>& playlist)
+    : m_item(item),
+      m_playlist(playlist)
   {
   }
 
   void Run() override
   {
-    const std::unique_ptr<PLAYLIST::CPlayList> playlist(PLAYLIST::CPlayListFactory::Create(m_item));
+    std::unique_ptr<PLAYLIST::CPlayList> playlist(PLAYLIST::CPlayListFactory::Create(m_item));
     if (playlist)
     {
       if (playlist->Load(m_item.GetPath()))
-        *m_playlist = *playlist;
+        m_playlist = std::move(playlist);
     }
   }
 
 private:
-  CFileItem& m_item;
+  const CFileItem& m_item;
   std::unique_ptr<PLAYLIST::CPlayList>& m_playlist;
 };
 } // namespace
@@ -1920,7 +1972,7 @@ bool CApplication::PlayMedia(CFileItem& item, const std::string& player, PLAYLIS
       return ProcessAndStartPlaylist(smartpl.GetName(), playlist, smartplPlaylistId);
     }
   }
-  else if (PLAYLIST::IsPlayList(item) || NETWORK::IsInternetStream(item))
+  else if ((PLAYLIST::IsPlayList(item) && !item.IsGame()) || NETWORK::IsInternetStream(item))
   {
     // Not owner. Dialog auto-deletes itself.
     CGUIDialogCache* dlgCache = new CGUIDialogCache(

@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
@@ -31,7 +31,6 @@
 #include "settings/Settings.h"
 #include "settings/SettingsComponent.h"
 #include "utils/Crc32.h"
-#include "utils/FileUtils.h"
 #include "utils/StringUtils.h"
 #include "utils/URIUtils.h"
 #include "utils/Variant.h"
@@ -229,19 +228,24 @@ void CGUIDialogVideoBookmarks::Delete(const CBookmark& bm)
 
 void CGUIDialogVideoBookmarks::OnRefreshList()
 {
-  m_bookmarks.clear();
-  std::vector<CFileItemPtr> items;
-
   // open the d/b and retrieve the bookmarks for the current movie
   m_filePath = g_application.CurrentFileItem().GetDynPath();
 
-  CVideoDatabase videoDatabase;
-  if (!videoDatabase.Open())
+  if (!CBookmark::GetBookmarksForFile(m_filePath, m_bookmarks,
+                                      {CBookmark::STANDARD, CBookmark::EPISODE}))
     return;
 
-  videoDatabase.GetBookMarksForFile(m_filePath, m_bookmarks);
-  videoDatabase.GetBookMarksForFile(m_filePath, m_bookmarks, CBookmark::EPISODE, true);
-  videoDatabase.Close();
+  {
+    auto& components = CServiceBroker::GetAppComponents();
+    const auto appPlayer = components.GetComponent<CApplicationPlayer>();
+    if (appPlayer != nullptr)
+    {
+      std::vector<std::chrono::milliseconds> pos = CBookmark::BookmarksToPositions(m_bookmarks);
+      appPlayer->SetBookmarks(pos);
+    }
+  }
+
+  std::vector<CFileItemPtr> items;
 
   std::unique_lock lock(m_refreshSection);
   m_vecItems->Clear();
@@ -332,7 +336,7 @@ void CGUIDialogVideoBookmarks::Update()
   if (g_application.CurrentFileItem().HasVideoInfoTag() && g_application.CurrentFileItem().GetVideoInfoTag()->m_iEpisode > -1)
   {
     std::vector<CVideoInfoTag> episodes;
-    videoDatabase.GetEpisodesByFile(g_application.CurrentFile(),episodes);
+    videoDatabase.GetEpisodesByFile(g_application.CurrentFileItem().GetDynPath(),episodes);
     if (episodes.size() > 1)
     {
       CONTROL_ENABLE(CONTROL_ADD_EPISODE_BOOKMARK);
@@ -477,7 +481,7 @@ bool CGUIDialogVideoBookmarks::AddBookmark(CVideoInfoTag* tag)
   {
     const std::shared_ptr<CProfileManager> profileManager = CServiceBroker::GetSettingsComponent()->GetProfileManager();
 
-    auto crc = Crc32::ComputeFromLowerCase(g_application.CurrentFile());
+    auto crc = Crc32::ComputeFromLowerCase(g_application.CurrentFileItem().GetDynPath());
     bookmark.thumbNailImage =
         StringUtils::Format("{:08x}_{}.jpg", crc, (int)bookmark.timeInSeconds);
     bookmark.thumbNailImage = URIUtils::AddFileToFolder(profileManager->GetBookmarksThumbFolder(), bookmark.thumbNailImage);
@@ -507,6 +511,10 @@ bool CGUIDialogVideoBookmarks::AddBookmark(CVideoInfoTag* tag)
   {
     const std::string path{g_application.CurrentFileItem().GetDynPath()};
     videoDatabase.AddBookMarkToFile(path, bookmark, CBookmark::STANDARD);
+
+    std::vector<std::chrono::milliseconds> positions = appPlayer->GetBookmarks();
+    CBookmark::AddToPositions(bookmark, positions);
+    appPlayer->SetBookmarks(positions);
   }
   videoDatabase.Close();
   return true;
@@ -542,7 +550,7 @@ bool CGUIDialogVideoBookmarks::AddEpisodeBookmark()
   if (!videoDatabase.Open())
     return false;
 
-  videoDatabase.GetEpisodesByFile(g_application.CurrentFile(), episodes);
+  videoDatabase.GetEpisodesByFile(g_application.CurrentFileItem().GetDynPath(), episodes);
   videoDatabase.Close();
   if (!episodes.empty())
   {
@@ -596,7 +604,7 @@ bool CGUIDialogVideoBookmarks::OnAddEpisodeBookmark()
     if (!videoDatabase.Open())
       return bReturn;
     std::vector<CVideoInfoTag> episodes;
-    videoDatabase.GetEpisodesByFile(g_application.CurrentFile(),episodes);
+    videoDatabase.GetEpisodesByFile(g_application.CurrentFileItem().GetDynPath(),episodes);
     if (episodes.size() > 1)
     {
       bReturn = CGUIDialogVideoBookmarks::AddEpisodeBookmark();

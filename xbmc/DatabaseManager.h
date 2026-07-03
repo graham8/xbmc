@@ -39,6 +39,13 @@ public:
    */
   bool Initialize();
 
+  /*! \brief Reset the database manager state.
+   Must be called on profile changes (LoadProfile / LogOff) so that the
+   next call to Initialize() re-runs the schema version check and migration
+   for all databases under the new profile's database folder.
+   */
+  void Deinitialize();
+
   /*! \brief Check whether we can open a database.
 
    Checks whether the database has been updated correctly, if so returns true.
@@ -65,6 +72,7 @@ public:
 private:
   std::atomic<bool> m_bIsUpgrading;
   std::atomic<bool> m_connecting{false};
+  bool m_initialized{false};
 
   enum class DBStatus
   {
@@ -74,9 +82,10 @@ private:
     FAILED
   };
   void UpdateStatus(const std::string& name, DBStatus status);
-  void UpdateDatabase(CDatabase &db, DatabaseSettings *settings = NULL);
+  bool UpdateDatabase(CDatabase& db, DatabaseSettings* settings = nullptr);
   bool Update(CDatabase &db, const DatabaseSettings &settings);
   bool UpdateVersion(CDatabase &db, const std::string &dbName);
+  bool InitializeInternal();
 
   CCriticalSection            m_section;     ///< Critical section protecting m_dbStatus.
   std::map<std::string, DBStatus> m_dbStatus; ///< Our database status map.

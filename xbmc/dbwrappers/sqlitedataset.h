@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2004, Leo Seib, Hannover
+ *  Copyright (C) 2004-2026, Leo Seib, Hannover, Team Kodi
  *
  *  Project:SQLiteDataset C++ Dynamic Library
  *  Module: SQLiteDataset class header file
@@ -31,7 +31,6 @@ protected:
   /* connect descriptor */
   sqlite3* conn{nullptr};
   bool _in_transaction{false};
-  int last_err;
 
 public:
   /* default constructor */
@@ -46,8 +45,6 @@ public:
   /* func. returns current status about SQLite-server connection */
   int status() override;
   int setErr(int err_code, const char* qry) override;
-  /* func. returns error message if error occurs */
-  const char* getErrorMsg() override;
   /* sets a new host name */
   void setHostName(const char* newHost) override;
   /* sets a database name */

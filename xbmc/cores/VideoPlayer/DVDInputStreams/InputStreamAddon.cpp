@@ -306,7 +306,7 @@ bool CInputStreamAddon::GetTimes(Times &times)
   if (!m_ifc.inputstream->toAddon->get_times)
     return false;
 
-  INPUTSTREAM_TIMES i_times;
+  INPUTSTREAM_TIMES i_times{};
 
   if (m_ifc.inputstream->toAddon->get_times(m_ifc.inputstream, &i_times))
   {
@@ -578,10 +578,10 @@ KODI_HANDLE CInputStreamAddon::cb_get_stream_transfer(KODI_HANDLE handle,
     demuxStream->cryptoSession = std::make_shared<DemuxCryptoSession>(
         map[stream->m_cryptoSession.keySystem], stream->m_cryptoSession.sessionId,
         stream->m_cryptoSession.flags);
-
-    if ((stream->m_features & INPUTSTREAM_FEATURE_DECODE) != 0)
-      demuxStream->externalInterfaces = thisClass->m_subAddonProvider;
   }
+
+  if ((stream->m_features & INPUTSTREAM_FEATURE_DECODE) != 0)
+    demuxStream->externalInterfaces = thisClass->m_subAddonProvider;
 
   // Tie the lifetime of the stream to the CInputStreamAddon
   thisClass->m_streams.emplace_back(demuxStream);
@@ -704,12 +704,13 @@ void CInputStreamAddon::GetChapterName(std::string& name, int ch)
   }
 }
 
-int64_t CInputStreamAddon::GetChapterPos(int ch)
+std::chrono::milliseconds CInputStreamAddon::GetChapterPos(int ch)
 {
+  //! @todo add API for ms precision
   if (m_ifc.inputstream->toAddon->get_chapter_pos)
-    return m_ifc.inputstream->toAddon->get_chapter_pos(m_ifc.inputstream, ch);
+    return std::chrono::seconds{m_ifc.inputstream->toAddon->get_chapter_pos(m_ifc.inputstream, ch)};
 
-  return 0;
+  return std::chrono::milliseconds{0};
 }
 
 bool CInputStreamAddon::SeekChapter(int ch)

@@ -1,12 +1,16 @@
 /*
- *  Copyright (C) 2005-2018 Team Kodi
+ *  Copyright (C) 2005-2026 Team Kodi
  *  This file is part of Kodi - https://kodi.tv
  *
  *  SPDX-License-Identifier: GPL-2.0-or-later
  *  See LICENSES/README.md for more information.
  */
 
+#include "ServiceBroker.h"
 #include "Util.h"
+#include "settings/AdvancedSettings.h"
+#include "settings/SettingsComponent.h"
+#include "video/FilenameAttributes.h"
 
 #include <gtest/gtest-param-test.h>
 #include <gtest/gtest.h>
@@ -14,6 +18,8 @@
 using ::testing::Test;
 using ::testing::ValuesIn;
 using ::testing::WithParamInterface;
+
+using namespace KODI::VIDEO;
 
 TEST(TestUtil, GetQualifiedFilename)
 {
@@ -111,13 +117,22 @@ std::ostream& operator<<(std::ostream& os, const TestUtilCleanStringData& rhs)
 
 class TestUtilCleanString : public Test, public WithParamInterface<TestUtilCleanStringData>
 {
+public:
+  static void SetUpTestSuite()
+  {
+    // Inject list of known metadata sources for reliable results
+    const std::shared_ptr<CAdvancedSettings> advancedSettings =
+        CServiceBroker::GetSettingsComponent()->GetAdvancedSettings();
+    ASSERT_TRUE(advancedSettings != nullptr);
+    advancedSettings->m_videoScannerMetadataSources = {"tmdb", "imdb"};
+  }
 };
 
 TEST_P(TestUtilCleanString, GetFilenameIdentifier)
 {
   std::string identifierType;
   std::string identifier;
-  CUtil::GetFilenameIdentifier(GetParam().input, identifierType, identifier);
+  CFilenameAttributes(GetParam().input, nullptr).GetIdentifier(identifierType, identifier);
   EXPECT_EQ(identifierType, GetParam().expIdentifierType);
   EXPECT_EQ(identifier, GetParam().expIdentifier);
 }
@@ -547,18 +562,18 @@ const TestBaseData Paths[] = {
      "movie"},
     {"bluray://smb%3a%2f%2fsomepath%2fmovie%2fdisc%201%2f/BDMV/PLAYLIST/00800.mpls",
      "smb://somepath/movie/disc 1/", "movie"},
-    {"zip://smb%3a%2f%2fsomepath%2fmovie%2fmovie.zip/BDMV/PLAYLIST/00800.mpls",
-     "smb://somepath/movie/", "movie"},
+    {"zip://smb%3a%2f%2fsomepath%2fmovie%2fmovie.zip/BDMV/index.BDMV", "smb://somepath/movie/",
+     "movie"},
     {"zip://smb%3a%2f%2fsomepath%2fmovie%2fdisc%201%2fmovie.zip/file.mkv",
-     "smb://somepath/movie/disc 1/", "movie"},
-    {"rar://smb%3a%2f%2fsomepath%2fmovie%2fmovie.rar/BDMV/PLAYLIST/00800.mpls",
-     "smb://somepath/movie/", "movie"},
+     "smb://somepath/movie/disc 1/", "file"},
+    {"rar://smb%3a%2f%2fsomepath%2fmovie%2fmovie.rar/BDMV/index.BDMV", "smb://somepath/movie/",
+     "movie"},
     {"rar://smb%3a%2f%2fsomepath%2fmovie%2fdisc%201%2fmovie.rar/file.mkv",
-     "smb://somepath/movie/disc 1/", "movie"},
-    {"archive://smb%3a%2f%2fsomepath%2fmovie%2fmovie.tar.gz/BDMV/PLAYLIST/00800.mpls",
+     "smb://somepath/movie/disc 1/", "file"},
+    {"archive://smb%3a%2f%2fsomepath%2fmovie%2fmovie.tar.gz/BDMV/index.BDMV",
      "smb://somepath/movie/", "movie"},
     {"archive://smb%3a%2f%2fsomepath%2fmovie%2fdisc%201%2fmovie.tar.gz/file.mkv",
-     "smb://somepath/movie/disc 1/", "movie"},
+     "smb://somepath/movie/disc 1/", "file"},
     // Embedded linux path tests
     {"bluray://udf%3a%2f%2f%252fsomepath%252fdisc%25201%252fmovie.iso%2f/BDMV/"
      "PLAYLIST/"
@@ -567,16 +582,15 @@ const TestBaseData Paths[] = {
     {"bluray://%2fsomepath%2fmovie%2f/BDMV/PLAYLIST/00800.mpls", "/somepath/movie/", "movie"},
     {"bluray://%2fsomepath%2fmovie%2fdisc%201%2f/BDMV/PLAYLIST/00800.mpls",
      "/somepath/movie/disc 1/", "movie"},
-    {"zip://%2fsomepath%2fmovie%2fmovie.zip/BDMV/PLAYLIST/00800.mpls", "/somepath/movie/", "movie"},
+    {"zip://%2fsomepath%2fmovie%2fmovie.zip/BDMV/index.BDMV", "/somepath/movie/", "movie"},
     {"zip://smb%3a%2f%2fsomepath%2fmovie%2fdisc%201%2fmovie.zip/file.mkv",
-     "smb://somepath/movie/disc 1/", "movie"},
-    {"rar://%2fsomepath%2fmovie%2fmovie.rar/BDMV/PLAYLIST/00800.mpls", "/somepath/movie/", "movie"},
+     "smb://somepath/movie/disc 1/", "file"},
+    {"rar://%2fsomepath%2fmovie%2fmovie.rar/BDMV/index.BDMV", "/somepath/movie/", "movie"},
     {"rar://%2fsomepath%2fmovie%2fdisc%201%2fmovie.rar/file.mkv", "/somepath/movie/disc 1/",
-     "movie"},
-    {"archive://%2fsomepath%2fmovie%2fmovie.tar.gz/BDMV/PLAYLIST/00800.mpls", "/somepath/movie/",
-     "movie"},
+     "file"},
+    {"archive://%2fsomepath%2fmovie%2fmovie.tar.gz/BDMV/index.BDMV", "/somepath/movie/", "movie"},
     {"archive://%2fsomepath%2fmovie%2fdisc%201%2fmovie.tar.gz/file.mkv", "/somepath/movie/disc 1/",
-     "movie"},
+     "file"},
     // Embedded DOS path tests
     {"bluray://udf%3a%2f%2fD%253a%255csomepath%255cmovie%255cdisc%25201%255cmovie.iso%2f/BDMV/"
      "PLAYLIST/"
@@ -586,18 +600,16 @@ const TestBaseData Paths[] = {
      "movie"},
     {"bluray://D%3a%5csomepath%5cmovie%5cdisc%201%5c/BDMV/PLAYLIST/00800.mpls",
      "D:\\somepath\\movie\\disc 1\\", "movie"},
-    {"zip://D%3a%5csomepath%5cmovie%5cmovie.zip/BDMV/PLAYLIST/00800.mpls", "D:\\somepath\\movie\\",
-     "movie"},
+    {"zip://D%3a%5csomepath%5cmovie%5cmovie.zip/BDMV/index.BDMV", "D:\\somepath\\movie\\", "movie"},
     {"zip://D%3a%5csomepath%5cmovie%5cdisc%201%5cmovie.zip/file.mkv",
-     "D:\\somepath\\movie\\disc 1\\", "movie"},
-    {"rar://D%3a%5csomepath%5cmovie%5cmovie.rar/BDMV/PLAYLIST/00800.mpls", "D:\\somepath\\movie\\",
-     "movie"},
+     "D:\\somepath\\movie\\disc 1\\", "file"},
+    {"rar://D%3a%5csomepath%5cmovie%5cmovie.rar/BDMV/index.BDMV", "D:\\somepath\\movie\\", "movie"},
     {"rar://D%3a%5csomepath%5cmovie%5cdisc%201%5cmovie.rar/file.mkv",
-     "D:\\somepath\\movie\\disc 1\\", "movie"},
-    {"archive://D%3a%5csomepath%5cmovie%5cmovie.tar.gz/BDMV/PLAYLIST/00800.mpls",
-     "D:\\somepath\\movie\\", "movie"},
+     "D:\\somepath\\movie\\disc 1\\", "file"},
+    {"archive://D%3a%5csomepath%5cmovie%5cmovie.tar.gz/BDMV/index.BDMV", "D:\\somepath\\movie\\",
+     "movie"},
     {"archive://D%3a%5csomepath%5cmovie%5cdisc%201%5cmovie.tar.gz/file.mkv",
-     "D:\\somepath\\movie\\disc 1\\", "movie"},
+     "D:\\somepath\\movie\\disc 1\\", "file"},
     // Embedded windows server path tests
     {"bluray://udf%3a%2f%2f%255c%255cServer%255cMovies%255cmovie%255cdisc%25201%255cmovie.iso%2f/"
      "BDMV/"
@@ -606,18 +618,27 @@ const TestBaseData Paths[] = {
      "\\\\Server\\Movies\\movie\\disc 1\\", "movie"},
     {"bluray://%5c%5cServer%5cMovies%5cmovie%5cdisc%201%5c/BDMV/PLAYLIST/00800.mpls",
      "\\\\Server\\Movies\\movie\\disc 1\\", "movie"},
-    {"zip://%5c%5cServer%5cMovies%5cmovie%5cmovie.zip/BDMV/PLAYLIST/00800.mpls",
+    {"zip://%5c%5cServer%5cMovies%5cmovie%5cmovie.zip/BDMV/index.BDMV",
      "\\\\Server\\Movies\\movie\\", "movie"},
     {"zip://%5c%5cServer%5cMovies%5cmovie%5cdisc%201%5cmovie.zip/file.mkv",
-     "\\\\Server\\Movies\\movie\\disc 1\\", "movie"},
-    {"rar://%5c%5cServer%5cMovies%5cmovie%5cmovie.rar/BDMV/PLAYLIST/00800.mpls",
+     "\\\\Server\\Movies\\movie\\disc 1\\", "file"},
+    {"rar://%5c%5cServer%5cMovies%5cmovie%5cmovie.rar/BDMV/index.BDMV",
      "\\\\Server\\Movies\\movie\\", "movie"},
     {"rar://%5c%5cServer%5cMovies%5cmovie%5cdisc%201%5cmovie.rar/file.mkv",
-     "\\\\Server\\Movies\\movie\\disc 1\\", "movie"},
-    {"archive://%5c%5cServer%5cMovies%5cmovie%5cmovie.tar.gz/BDMV/PLAYLIST/00800.mpls",
+     "\\\\Server\\Movies\\movie\\disc 1\\", "file"},
+    {"archive://%5c%5cServer%5cMovies%5cmovie%5cmovie.tar.gz/BDMV/index.BDMV",
      "\\\\Server\\Movies\\movie\\", "movie"},
     {"archive://%5c%5cServer%5cMovies%5cmovie%5cdisc%201%5cmovie.tar.gz/file.mkv",
-     "\\\\Server\\Movies\\movie\\disc 1\\", "movie"}};
+     "\\\\Server\\Movies\\movie\\disc 1\\", "file"},
+    // HTTP URL with query string
+    {"http://192.168.1.1/movie.mkv?session=abc", "http://192.168.1.1/", "movie"},
+    {"http://192.168.1.1/path/movie.mkv?session=abc", "http://192.168.1.1/path/", "movie"},
+    // Endpoint-style URL where the query selects the media
+    {"http://192.168.1.1/stream?file=movie.mkv", "http://192.168.1.1/", "stream"},
+    {"http://192.168.1.1/dir/stream?file=movie.mkv", "http://192.168.1.1/dir/", "stream"},
+    // HTTP URL with multi-param query string
+    {"http://192.168.0.110:80/immich/album-2025/VID_20250624_114200.mp4?index=1&play",
+     "http://192.168.0.110:80/immich/album-2025/", "VID_20250624_114200"}};
 
 TEST_P(TestVideoBasePathAndFileName, GetVideoBasePathAndFileName)
 {
@@ -683,11 +704,11 @@ constexpr TestMatchingSourceData SourcesToMatch[] = {
      0},
     {"smb://somepath/TV Shows/A Perfect Planet (2021)/", 1},
     {"smb://somepath/Other/Something Else/", -1},
-    {"zip://smb%3a%2f%2fsomepath%2fMovies%2fmovie.zip/BDMV/PLAYLIST/00800.mpls", 0},
+    {"zip://smb%3a%2f%2fsomepath%2fMovies%2fmovie.zip/BDMV/index.BDMV", 0},
     {"zip://smb%3a%2f%2fsomepath%2fTV%20Shows%2fShowf%2fdisc%201%2fshow.rar/file.mkv", 1},
-    {"rar://smb%3a%2f%2fsomepath%2fMovies%2fmovie.rar/BDMV/PLAYLIST/00800.mpls", 0},
+    {"rar://smb%3a%2f%2fsomepath%2fMovies%2fmovie.rar/BDMV/index.BDMV", 0},
     {"rar://smb%3a%2f%2fsomepath%2fTV%20Shows%2fShowf%2fdisc%201%2fshow.rar/file.mkv", 1},
-    {"archive://smb%3a%2f%2fsomepath%2fMovies%2fmovie.tar.gz/BDMV/PLAYLIST/00800.mpls", 0},
+    {"archive://smb%3a%2f%2fsomepath%2fMovies%2fmovie.tar.gz/BDMV/index.BDMV", 0},
     {"archive://smb%3a%2f%2fsomepath%2fTV%20Shows%2fShowf%2fdisc%201%2fshow.tar.gz/file.mkv", 1},
     {"stack://smb://somepath/Documentaries/other/part 1.mkv , "
      "smb://somepath/Documentaries/other/part 2.mkv",
@@ -715,11 +736,11 @@ constexpr TestMatchingSourceData SourcesToMatch[] = {
      3},
     {"/somepath/TV Shows/A Perfect Planet (2021)/", 4},
     {"/somepath/Other/Something Else/", -1},
-    {"zip://%2fsomepath%2fMovies%2fmovie.zip/BDMV/PLAYLIST/00800.mpls", 3},
+    {"zip://%2fsomepath%2fMovies%2fmovie.zip/BDMV/index.BDMV", 3},
     {"zip://%2fsomepath%2fTV%20Shows%2fShowf%2fdisc%201%2fshow.rar/file.mkv", 4},
-    {"rar://%2fsomepath%2fMovies%2fmovie.rar/BDMV/PLAYLIST/00800.mpls", 3},
+    {"rar://%2fsomepath%2fMovies%2fmovie.rar/BDMV/index.BDMV", 3},
     {"rar://%2fsomepath%2fTV%20Shows%2fShowf%2fdisc%201%2fshow.rar/file.mkv", 4},
-    {"archive://%2fsomepath%2fMovies%2fmovie.tar.gz/BDMV/PLAYLIST/00800.mpls", 3},
+    {"archive://%2fsomepath%2fMovies%2fmovie.tar.gz/BDMV/index.BDMV", 3},
     {"archive://%2fsomepath%2fTV%20Shows%2fShowf%2fdisc%201%2fshow.tar.gz/file.mkv", 4},
     {"stack:///somepath/Documentaries/other/part 1.mkv , "
      "/somepath/Documentaries/other/part 2.mkv",
@@ -752,11 +773,11 @@ constexpr TestMatchingSourceData SourcesToMatch[] = {
      6},
     {"D:\\somepath\\TV Shows\\A Perfect Planet (2021)\\", 7},
     {"D:\\somepath\\Other/Something Else\\", -1},
-    {"zip://D%3a%5csomepath%5cMovies%5cmovie.zip/BDMV/PLAYLIST/00800.mpls", 6},
+    {"zip://D%3a%5csomepath%5cMovies%5cmovie.zip/BDMV/index.BDMV", 6},
     {"zip://D%3a%5csomepath%5cTV%20Shows%5cdisc%201%5cshow.rar/file.mkv", 7},
-    {"rar://D%3a%5csomepath%5cMovies%5cmovie.rar/BDMV/PLAYLIST/00800.mpls", 6},
+    {"rar://D%3a%5csomepath%5cMovies%5cmovie.rar/BDMV/index.BDMV", 6},
     {"rar://D%3a%5csomepath%5cTV%20Shows%5cdisc%201%5cshow.rar/file.mkv", 7},
-    {"archive://D%3a%5csomepath%5cMovies%5cmovie.tar.gz/BDMV/PLAYLIST/00800.mpls", 6},
+    {"archive://D%3a%5csomepath%5cMovies%5cmovie.tar.gz/BDMV/index.BDMV", 6},
     {"archive://D%3a%5csomepath%5cTV%20Shows%5cdisc%201%2fshow.tar.gz/file.mkv", 7},
     {"stack://D:\\somepath\\Documentaries\\other\\part 1.mkv , "
      "D:\\somepath\\Documentaries\\other\\part 2.mkv",
@@ -789,11 +810,11 @@ constexpr TestMatchingSourceData SourcesToMatch[] = {
      9},
     {"\\\\Server\\TV Shows\\A Perfect Planet (2021)\\", 10},
     {"\\\\Server\\Other\\Something Else\\", -1},
-    {"zip://%5c%5cServer%5cMovies%5cmovie.zip/BDMV/PLAYLIST/00800.mpls", 9},
+    {"zip://%5c%5cServer%5cMovies%5cmovie.zip/BDMV/index.BDMV", 9},
     {"zip://%5c%5cServer%5cTV%20Shows%5cdisc%201%5cshow.rar/file.mkv", 10},
-    {"rar://%5c%5cServer%5cMovies%5cmovie.rar/BDMV/PLAYLIST/00800.mpls", 9},
+    {"rar://%5c%5cServer%5cMovies%5cmovie.rar/BDMV/index.BDMV", 9},
     {"rar://%5c%5cServer%5cTV%20Shows%5cdisc%201%5cshow.rar/file.mkv", 10},
-    {"archive://%5c%5cServer%5cMovies%5cmovie.tar.gz/BDMV/PLAYLIST/00800.mpls", 9},
+    {"archive://%5c%5cServer%5cMovies%5cmovie.tar.gz/BDMV/index.BDMV", 9},
     {"archive://%5c%5cServer%5cTV%20Shows%5cdisc%201%2fshow.tar.gz/file.mkv", 10},
     {"stack://\\\\Server\\Documentaries\\other\\part 1.mkv , "
      "\\\\Server\\Documentaries\\other\\part 2.mkv",

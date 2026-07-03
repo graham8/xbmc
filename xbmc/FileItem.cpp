@@ -24,7 +24,6 @@
 #include "filesystem/VideoDatabaseDirectory/QueryParams.h"
 #include "games/GameUtils.h"
 #include "games/tags/GameInfoTag.h"
-#include "media/MediaLockState.h"
 #include "music/Album.h"
 #include "music/Artist.h"
 #include "music/MusicDatabase.h"
@@ -56,6 +55,7 @@
 #include "settings/lib/Setting.h"
 #include "utils/Archive.h"
 #include "utils/ArtUtils.h"
+#include "utils/EpisodeUtils.h"
 #include "utils/FileExtensionProvider.h"
 #include "utils/Mime.h"
 #include "utils/RegExp.h"
@@ -69,8 +69,12 @@
 #include "video/VideoInfoTag.h"
 #include "video/VideoUtils.h"
 
+#include <cstdint>
 #include <cstdlib>
+#include <map>
 #include <memory>
+#include <string>
+#include <vector>
 
 using namespace KODI;
 using namespace XFILE;
@@ -651,32 +655,32 @@ void CFileItem::ToSortable(SortItem &sortable, Field field) const
 {
   switch (field)
   {
-    case FieldPath:
-      sortable[FieldPath] = m_strPath;
+    case Field::PATH:
+      sortable[Field::PATH] = m_strPath;
       break;
-    case FieldDate:
-      sortable[FieldDate] = (m_dateTime.IsValid()) ? m_dateTime.GetAsDBDateTime() : "";
+    case Field::DATE:
+      sortable[Field::DATE] = (m_dateTime.IsValid()) ? m_dateTime.GetAsDBDateTime() : "";
       break;
-    case FieldSize:
-      sortable[FieldSize] = m_dwSize;
+    case Field::SIZE:
+      sortable[Field::SIZE] = m_dwSize;
       break;
-    case FieldDriveType:
-      sortable[FieldDriveType] = static_cast<int>(m_iDriveType);
+    case Field::DRIVE_TYPE:
+      sortable[Field::DRIVE_TYPE] = static_cast<int>(m_iDriveType);
       break;
-    case FieldStartOffset:
-      sortable[FieldStartOffset] = m_lStartOffset;
+    case Field::START_OFFSET:
+      sortable[Field::START_OFFSET] = m_lStartOffset;
       break;
-    case FieldEndOffset:
-      sortable[FieldEndOffset] = m_lEndOffset;
+    case Field::END_OFFSET:
+      sortable[Field::END_OFFSET] = m_lEndOffset;
       break;
-    case FieldProgramCount:
-      sortable[FieldProgramCount] = m_programCount;
+    case Field::PROGRAM_COUNT:
+      sortable[Field::PROGRAM_COUNT] = m_programCount;
       break;
-    case FieldBitrate:
-      sortable[FieldBitrate] = m_dwSize;
+    case Field::BITRATE:
+      sortable[Field::BITRATE] = m_dwSize;
       break;
-    case FieldTitle:
-      sortable[FieldTitle] = m_strTitle;
+    case Field::TITLE:
+      sortable[Field::TITLE] = m_strTitle;
       break;
 
     // If there's ever a need to convert more properties from CGUIListItem it might be
@@ -708,14 +712,14 @@ void CFileItem::ToSortable(SortItem &sortable, Field field) const
   {
     switch (field)
     {
-      case FieldInstallDate:
-        sortable[FieldInstallDate] = GetAddonInfo()->InstallDate().GetAsDBDateTime();
+      case Field::INSTALL_DATE:
+        sortable[Field::INSTALL_DATE] = GetAddonInfo()->InstallDate().GetAsDBDateTime();
         break;
-      case FieldLastUpdated:
-        sortable[FieldLastUpdated] = GetAddonInfo()->LastUpdated().GetAsDBDateTime();
+      case Field::LAST_UPDATED:
+        sortable[Field::LAST_UPDATED] = GetAddonInfo()->LastUpdated().GetAsDBDateTime();
         break;
-      case FieldLastUsed:
-        sortable[FieldLastUsed] = GetAddonInfo()->LastUsed().GetAsDBDateTime();
+      case Field::LAST_USED:
+        sortable[Field::LAST_USED] = GetAddonInfo()->LastUsed().GetAsDBDateTime();
         break;
       default:
         break;
@@ -730,8 +734,8 @@ void CFileItem::ToSortable(SortItem &sortable, Field field) const
 
   if (IsFavourite())
   {
-    if (field == FieldUserPreference)
-      sortable[FieldUserPreference] = GetProperty("favourite.index").asString();
+    if (field == Field::USER_PREFERENCE)
+      sortable[Field::USER_PREFERENCE] = GetProperty("favourite.index").asString();
   }
 }
 
@@ -741,10 +745,10 @@ void CFileItem::ToSortable(SortItem &sortable, const Fields &fields) const
     ToSortable(sortable, field);
 
   /* FieldLabel is used as a fallback by all sorters and therefore has to be present as well */
-  sortable[FieldLabel] = GetLabel();
+  sortable[Field::LABEL] = GetLabel();
   /* FieldSortSpecial and FieldFolder are required in conjunction with all other sorters as well */
-  sortable[FieldSortSpecial] = static_cast<int>(m_specialSort);
-  sortable[FieldFolder] = IsFolder();
+  sortable[Field::SORT_SPECIAL] = static_cast<int>(m_specialSort);
+  sortable[Field::FOLDER] = IsFolder();
 }
 
 bool CFileItem::Exists(bool bUseCache /* = true */) const
@@ -1308,7 +1312,9 @@ bool CFileItem::IsAlbum() const
   return m_bIsAlbum;
 }
 
-void CFileItem::UpdateInfo(const CFileItem &item, bool replaceLabels /*=true*/)
+void CFileItem::UpdateInfo(const CFileItem& item,
+                           bool replaceLabels /* = true */,
+                           MultipleEpisodes replaceEpisodes /* = DONT_GROUP_MULTIPLE_EPISODES */)
 {
   if (item.HasVideoInfoTag())
   { // copy info across
@@ -1376,8 +1382,26 @@ void CFileItem::UpdateInfo(const CFileItem &item, bool replaceLabels /*=true*/)
     SetInvalid();
   }
   SetDynPath(item.GetDynPath());
-  if (replaceLabels && !item.GetLabel().empty())
-    SetLabel(item.GetLabel());
+
+  // Alter label to episode number(s) if requested
+  std::string label;
+  if (replaceLabels)
+  {
+    if (replaceEpisodes == MultipleEpisodes::GROUP_MULTIPLE_EPISODES &&
+        item.HasProperty("episodes") && item.GetVideoContentType() == VideoDbContentType::EPISODES)
+    {
+      label = CEpisodeUtils::GetEpisodesLabel(item);
+
+      // Multiple episodes so use show plot rather than episode plot
+      if (HasVideoInfoTag() && item.HasProperty("episodes_show_plot"))
+        GetVideoInfoTag()->m_strPlot = item.GetProperty("episodes_show_plot").asString();
+    }
+    else if (!item.GetLabel().empty())
+      label = item.GetLabel();
+  }
+  if (!label.empty())
+    SetLabel(label);
+
   if (replaceLabels && !item.GetLabel2().empty())
     SetLabel2(item.GetLabel2());
   if (!item.GetArt().empty())
@@ -1922,30 +1946,67 @@ std::string CFileItem::GetBaseMoviePath(bool bUseFolderNames) const
   {
     strMovieName = CStackDirectory::GetBasePath(m_strPath);
   }
-  else if (bUseFolderNames && (!IsFolder() || URIUtils::IsInArchive(m_strPath) ||
-                               (HasVideoInfoTag() && GetVideoInfoTag()->m_iDbId > 0 &&
-                                !CMediaTypes::IsContainer(GetVideoInfoTag()->m_type))))
+  else if (bUseFolderNames && !URIUtils::IsInArchive(strMovieName) &&
+           (!IsFolder() || (HasVideoInfoTag() && GetVideoInfoTag()->m_iDbId > 0 &&
+                            !CMediaTypes::IsContainer(GetVideoInfoTag()->m_type))))
   {
     const std::string name{strMovieName};
-    URIUtils::GetParentPath(name, strMovieName);
+    if (!URIUtils::GetParentPath(name, strMovieName))
+      strMovieName = name;
   }
   if (strMovieName.empty())
     return strMovieName;
 
-  const CURL url{strMovieName};
+  CURL url{strMovieName};
   if (URIUtils::IsInArchive(strMovieName) || URIUtils::IsArchive(url))
   {
-    // Try to get archive itself, if empty take path before
-    std::string name{url.GetHostName()};
-    if (name.empty())
-      name = strMovieName;
-    if (bUseFolderNames)
+    // If not using folder names then the archive itself may contain multiple movie files
+    //  so use the file name instead of the archive name
+    // Otherwise return the folder containing the archive (to be consistent with other cases where we use folder names)
+    if (!bUseFolderNames)
     {
-      if (!URIUtils::GetParentPath(name, strMovieName))
-        strMovieName = name;
+      // Special case is a bluray/dvd in a compressed file
+      const std::string name{url.GetHostName()};
+      if (!name.empty() && (URIUtils::IsBDFile(strMovieName) || URIUtils::IsDVDFile(strMovieName)))
+      {
+        // We have two choices - if there is a folder within the archive then use that, otherwise use the file name of the archive
+        const std::string base{URIUtils::RemoveDiscPath(url.GetFileName())};
+        if (!base.empty())
+        {
+          const std::string folder{URIUtils::GetDirectory(URIUtils::RemoveDiscPath(strMovieName))};
+          strMovieName = folder;
+        }
+        else
+          strMovieName = name;
+      }
     }
     else
-      strMovieName = name;
+    {
+      // First see if the movie is in a folder within the archive (that isn't a BD/DVD folder)
+      if (URIUtils::IsBDFile(strMovieName) || URIUtils::IsDVDFile(strMovieName))
+      {
+        const std::string base{URIUtils::RemoveDiscPath(strMovieName)};
+        if (!base.empty())
+        {
+          strMovieName = base;
+          url = CURL(strMovieName);
+        }
+      }
+      const std::string folder{URIUtils::GetDirectory(url.GetFileName())};
+      if (folder.empty())
+      {
+        // Not in folder in archive so use folder archive is in
+        const std::string name{strMovieName};
+        if (!URIUtils::GetParentPath(name, strMovieName))
+          strMovieName = name;
+      }
+      else
+      {
+        const std::string base{URIUtils::GetDirectory(strMovieName)};
+        if (!base.empty())
+          strMovieName = base;
+      }
+    }
   }
 
   // Remove any trailing 'Disc n' and disc path (VIDEO_TS or BDMV) to get actual movie title

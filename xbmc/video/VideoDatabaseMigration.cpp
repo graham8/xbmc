@@ -27,6 +27,7 @@
 #include "utils/log.h"
 
 #include <algorithm>
+#include <cctype>
 #include <functional>
 #include <map>
 #include <memory>
@@ -66,6 +67,38 @@ void InitializeVideoVersionTypeTableV123(CDatabase& db)
     CLog::LogF(LOGERROR, "failed");
     throw;
   }
+}
+
+static std::string LowerCaseEncodingV143(std::string_view in)
+{
+  std::string out;
+  out.reserve(in.size());
+
+  constexpr auto is_hex = [](char c) noexcept
+  { return ('0' <= c && c <= '9') || ('a' <= c && c <= 'f') || ('A' <= c && c <= 'F'); };
+
+  for (auto it = in.begin(); it != in.end(); ++it)
+  {
+    if (*it == '%' && std::ranges::distance(it, in.end()) > 2)
+    {
+      if (is_hex(it[1]) && is_hex(it[2]))
+      {
+        out += '%';
+        out += StringUtils::ToLowerAscii(it[1]);
+        out += StringUtils::ToLowerAscii(it[2]);
+        std::ranges::advance(it, 2);
+      }
+      else
+      {
+        CLog::LogF(LOGDEBUG, "Invalid encoding in path {}", CURL::GetRedacted(std::string(in)));
+        out += *it;
+      }
+    }
+    else
+      out += *it;
+  }
+
+  return out;
 }
 } // namespace KODI::DATABASE::MIGRATION
 
@@ -460,7 +493,7 @@ void CVideoDatabase::UpdateTables(int iVersion)
   }
 
   if (iVersion < 97)
-    m_pDS->exec("ALTER TABLE sets ADD strOverview TEXT");
+    m_pDS->exec("ALTER TABLE `sets` ADD strOverview TEXT");
 
   if (iVersion < 98)
     m_pDS->exec("ALTER TABLE seasons ADD name text");
@@ -982,10 +1015,10 @@ void CVideoDatabase::UpdateTables(int iVersion)
 
   if (iVersion < 136)
   {
-    m_pDS->exec("ALTER TABLE sets ADD strOriginalSet TEXT");
+    m_pDS->exec("ALTER TABLE `sets` ADD strOriginalSet TEXT");
 
     // Copy current set title for existing sets
-    m_pDS->exec("UPDATE sets SET strOriginalSet = strSet");
+    m_pDS->exec("UPDATE `sets` SET strOriginalSet = strSet");
   }
 
   if (iVersion < 138)
@@ -1055,9 +1088,130 @@ void CVideoDatabase::UpdateTables(int iVersion)
     }
     m_pDS->close();
   }
+
+  if (iVersion < 143)
+  {
+    m_pDS->query("SELECT f.idFile, f.strFilename, f.dateAdded, f.idPath FROM files AS f "
+                 "WHERE f.strFilename LIKE 'rar://%' OR f.strFilename LIKE 'zip://%'");
+
+    while (!m_pDS->eof())
+    {
+      const int idFile = m_pDS->fv(0).get_asInt();
+      const std::string oldFile = m_pDS->fv(1).get_asString();
+      const std::string oldDate = m_pDS->fv(2).get_asString();
+      const int oldIdPath = m_pDS->fv(3).get_asInt();
+
+      // Same prefix length for zip and rar protocols
+      constexpr std::size_t protLength{std::char_traits<char>::length("zip://")};
+      const std::size_t firstSep{oldFile.find('/', protLength)};
+      if (firstSep != std::string::npos)
+      {
+        const std::size_t lastSep{oldFile.rfind('/')};
+        // Convert the case of the encoded part of the url only, append the rest unchanged.
+        const std::string newPath{
+            KODI::DATABASE::MIGRATION::LowerCaseEncodingV143(oldFile.substr(0, firstSep)) +
+            oldFile.substr(firstSep, lastSep + 1 - firstSep)};
+        const std::string newFile{oldFile.substr(lastSep + 1)};
+
+        if (!newFile.empty())
+        {
+          // See if path exists
+          int idPath = -1;
+          std::string strSQL =
+              PrepareSQL("SELECT idPath FROM path WHERE path.strPath = '%s'", newPath.c_str());
+          m_pDS2->query(strSQL);
+          if (!m_pDS2->eof())
+            idPath = m_pDS2->fv(0).get_asInt(); // Existing path
+          else
+          {
+            // Create new path (zip:// etc..) as we still need the original parent path to remain for scanning/hash purposes
+            // For example - whilst zip:// still counts as a folder (as the Kodi vfs supports 'files as folders') the hash is taken from the
+            //  parent path (the physical folder on disc) - eg. the path to the media might be zip://c:\my movies\movie/movie.zip but the hash
+            //  is on c:\my movies\movie - so we need to keep both.
+            strSQL = PrepareSQL("INSERT INTO path (idPath, strPath, dateAdded, idParentPath) "
+                                "VALUES (NULL, '%s', '%s', %i)",
+                                newPath.c_str(), oldDate.c_str(), oldIdPath);
+            m_pDS2->exec(strSQL);
+            idPath = static_cast<int>(m_pDS2->lastinsertid());
+          }
+
+          // Update file with new idPath and filename
+          if (idPath > 0)
+            m_pDS2->exec(
+                PrepareSQL("UPDATE files SET idPath = %i, strFilename = '%s' WHERE idFile = %i",
+                           idPath, newFile.c_str(), idFile));
+        }
+        m_pDS2->close();
+      }
+      m_pDS->next();
+    }
+    m_pDS->close();
+  }
+
+  if (iVersion < 144)
+  {
+    m_pDS->exec("ALTER TABLE streamdetails ADD strHdrDetail text");
+  }
+
+  if (iVersion < 145)
+  {
+    m_pDS->exec("UPDATE streamdetails set strAudioCodec = 'dts' where strAudioCodec = 'dca'");
+  }
+
+  if (iVersion < 146)
+  {
+    constexpr int LOCAL_VIDEODB_ID_EPISODE_RUNTIME = 9;
+
+    // Create indices to speed up the queries below (CVideoDatabaseDDL::CreateIndices() has not been called yet)
+    m_pDS->exec("CREATE UNIQUE INDEX ix_episode_file_1 ON episode (idEpisode, idFile)");
+    m_pDS->exec("CREATE UNIQUE INDEX id_episode_file_2 ON episode (idFile, idEpisode)");
+    m_pDS->exec("CREATE INDEX ix_streamdetails ON streamdetails (idFile)");
+
+    // Create temporary table
+    // Avoids MySQL/MariaDB/Sqlite incompatible differences in the later UPDATE and DELETE queries
+    m_pDS->exec("CREATE TABLE single_video_streams "
+                "(idEpisode INTEGER PRIMARY KEY, idFile INTEGER, iVideoDuration INTEGER, "
+                "iTotalStreams INTEGER)");
+
+    // Populate temporary table
+    // Find any episode where the duration (c09) is 0 but there is a video stream with a positive duration in streamdetails
+    // We don't look for height/width = 0 here as the file may have been played and proper streamdetails derived
+    m_pDS->exec(PrepareSQL(
+        "INSERT INTO single_video_streams (idEpisode, idFile, iVideoDuration, iTotalStreams) "
+        "SELECT e.idEpisode, e.idFile, "
+        "  MAX(s.iVideoDuration), "
+        "  (SELECT COUNT(*) FROM streamdetails s2 WHERE s2.idFile = e.idFile) "
+        "FROM episode e "
+        "JOIN streamdetails s ON e.idFile = s.idFile "
+        "WHERE (e.c%02d = '0' OR e.c%02d IS NULL) "
+        "  AND s.iStreamType = 0 AND s.iVideoDuration > 0 "
+        "GROUP BY e.idEpisode, e.idFile",
+        LOCAL_VIDEODB_ID_EPISODE_RUNTIME, LOCAL_VIDEODB_ID_EPISODE_RUNTIME));
+
+    // Update the episodes' duration with the value from streamdetails
+    m_pDS->exec(PrepareSQL("UPDATE episode "
+                           "SET c%02d = (SELECT iVideoDuration FROM single_video_streams AS s "
+                           "            WHERE s.idEpisode = episode.idEpisode) "
+                           "WHERE idEpisode IN (SELECT idEpisode FROM single_video_streams)",
+                           LOCAL_VIDEODB_ID_EPISODE_RUNTIME));
+
+    // Delete any streamdetails where the video height/width are 0 (dummy entry created by scraper)
+    m_pDS->exec(PrepareSQL("DELETE FROM streamdetails "
+                           "WHERE iVideoHeight = 0 AND iVideoWidth = 0 AND iStreamType = 0 "
+                           "  AND idFile IN (SELECT idFile FROM single_video_streams "
+                           "                   WHERE iTotalStreams = 1)"));
+
+    // Remove temporary table
+    m_pDS->exec("DROP TABLE IF EXISTS single_video_streams");
+
+    // Remove indices
+    m_pDS->dropIndex("episode", "ix_episode_file_1");
+    m_pDS->dropIndex("episode", "id_episode_file_2");
+    m_pDS->dropIndex("streamdetails", "ix_streamdetails");
+  }
 }
 
 int CVideoDatabase::GetSchemaVersion() const
 {
-  return 141;
+  return 146;
 }

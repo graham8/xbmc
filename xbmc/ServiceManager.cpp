@@ -54,7 +54,10 @@
 
 using namespace KODI;
 
-CServiceManager::CServiceManager() = default;
+CServiceManager::CServiceManager()
+  : m_fileExtensionProvider(std::make_unique<CFileExtensionProvider>())
+{
+}
 
 CServiceManager::~CServiceManager()
 {
@@ -79,9 +82,10 @@ bool CServiceManager::InitForTesting()
     CLog::Log(LOGFATAL, "CServiceManager::{}: Unable to start CAddonMgr", __FUNCTION__);
     return false;
   }
+  m_dataCacheCore = std::make_unique<CDataCacheCore>();
 
   m_extsMimeSupportList = std::make_unique<ADDONS::CExtsMimeSupportList>(*m_addonMgr);
-  m_fileExtensionProvider = std::make_unique<CFileExtensionProvider>(*m_addonMgr);
+  m_fileExtensionProvider->Initialize(*m_addonMgr);
 
   m_subTagRegistryManager = std::make_unique<KODI::UTILS::I18N::CSubTagRegistryManager>();
   m_subTagRegistryManager->Initialize();
@@ -94,8 +98,9 @@ void CServiceManager::DeinitTesting()
 {
   init_level = 0;
   m_subTagRegistryManager.reset();
-  m_fileExtensionProvider.reset();
+  m_fileExtensionProvider->Deinitialize();
   m_extsMimeSupportList.reset();
+  m_dataCacheCore.reset();
   m_binaryAddonManager.reset();
   m_addonMgr.reset();
   m_databaseManager.reset();
@@ -126,7 +131,15 @@ bool CServiceManager::InitStageOne()
 bool CServiceManager::InitStageTwo(const std::string& profilesUserDataFolder)
 {
   // Initialize the addon database (must be before the addon manager is init'd)
-  m_databaseManager = std::make_unique<CDatabaseManager>();
+  try
+  {
+    m_databaseManager = std::make_unique<CDatabaseManager>();
+  }
+  catch (...)
+  {
+    CLog::Log(LOGFATAL, "CServiceManager::{}: Unable to start CDatabaseManager", __FUNCTION__);
+    return false;
+  }
 
   m_binaryAddonManager = std::make_unique<
       ADDON::
@@ -167,7 +180,7 @@ bool CServiceManager::InitStageTwo(const std::string& profilesUserDataFolder)
 
   m_gameRenderManager = std::make_unique<RETRO::CGUIGameRenderManager>();
 
-  m_fileExtensionProvider = std::make_unique<CFileExtensionProvider>(*m_addonMgr);
+  m_fileExtensionProvider->Initialize(*m_addonMgr);
 
   m_powerManager = std::make_unique<CPowerManager>();
   m_powerManager->Initialize();
@@ -210,7 +223,8 @@ bool CServiceManager::InitStageThree(const std::shared_ptr<CProfileManager>& pro
 
   m_gameServices = std::make_unique<GAME::CGameServices>(
       *m_gameControllerManager, *m_gameRenderManager, *m_peripherals, *profileManager,
-      *m_inputManager, *m_addonMgr);
+      *m_inputManager, *m_addonMgr, *m_fileExtensionProvider);
+  m_gameServices->Initialize();
 
   m_contextMenuManager->Init();
 
@@ -229,6 +243,9 @@ bool CServiceManager::InitStageThree(const std::shared_ptr<CProfileManager>& pro
 
 void CServiceManager::DeinitStageThree()
 {
+  if (init_level < 3)
+    return;
+
   init_level = 2;
 #if !defined(TARGET_WINDOWS) && defined(HAS_OPTICAL_DRIVE)
   m_DetectDVDType->StopThread();
@@ -237,6 +254,7 @@ void CServiceManager::DeinitStageThree()
   m_playerCoreFactory.reset();
   m_PVRManager->Deinit();
   m_contextMenuManager->Deinit();
+  m_gameServices->Deinitialize();
   m_gameServices.reset();
   m_peripherals->Clear();
 
@@ -245,6 +263,9 @@ void CServiceManager::DeinitStageThree()
 
 void CServiceManager::DeinitStageTwo()
 {
+  if (init_level < 2)
+    return;
+
   init_level = 1;
 
   m_subTagRegistryManager.reset();
@@ -255,7 +276,7 @@ void CServiceManager::DeinitStageTwo()
 
   m_weatherManager.reset();
   m_powerManager.reset();
-  m_fileExtensionProvider.reset();
+  m_fileExtensionProvider->Deinitialize();
   m_gameRenderManager.reset();
   m_peripherals.reset();
   m_inputManager.reset();
@@ -281,6 +302,9 @@ void CServiceManager::DeinitStageTwo()
 
 void CServiceManager::DeinitStageOne()
 {
+  if (init_level < 1)
+    return;
+
   init_level = 0;
 
   m_network.reset();

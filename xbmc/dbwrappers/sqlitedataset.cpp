@@ -1,5 +1,5 @@
 /**********************************************************************
- *  Copyright (C) 2004, Leo Seib, Hannover
+ *  Copyright (C) 2004-2026, Leo Seib, Hannover
  *
  *  Project:SQLiteDataset C++ Dynamic Library
  *  Module: SQLiteDataset class realisation file
@@ -301,14 +301,10 @@ int SqliteDatabase::setErr(int err_code, const char* qry)
   }
   if (conn)
     ss << " (" << sqlite3_errmsg(conn) << ")";
-  ss << "\nQuery: " << qry;
+  if (qry != nullptr)
+    ss << "\nQuery: " << qry;
   error = ss.str();
   return err_code;
-}
-
-const char* SqliteDatabase::getErrorMsg()
-{
-  return error.c_str();
 }
 
 static int AlphaNumericCollation(
@@ -321,6 +317,16 @@ int SqliteDatabase::connect(bool create)
 {
   if (host.empty() || db.empty())
     return DB_CONNECTION_NONE;
+
+  {
+    static bool showed_ver_info = false;
+    if (!showed_ver_info)
+    {
+      const char* version_string = sqlite3_libversion();
+      CLog::Log(LOGINFO, "SqliteDatabase: library version {}", version_string);
+      showed_ver_info = true;
+    }
+  }
 
   //CLog::Log(LOGDEBUG, "Connecting to sqlite:{}:{}", host, db);
 
@@ -387,8 +393,9 @@ bool SqliteDatabase::exists()
 
   // performing a select all on the sqlite_master will return rows if there are tables
   // defined indicating it's not empty and therefore must "exist".
-  last_err = sqlite3_exec(getHandle(), "SELECT * FROM sqlite_master", &callback, &res, nullptr);
-  if (last_err == SQLITE_OK)
+  const int err =
+      sqlite3_exec(getHandle(), "SELECT * FROM sqlite_master", &callback, &res, nullptr);
+  if (err == SQLITE_OK)
   {
     bRet = !res.records.empty();
   }
@@ -402,6 +409,7 @@ void SqliteDatabase::disconnect()
     return;
   sqlite3_close(conn);
   active = false;
+  conn = nullptr; // Reset handle to avoid stale pointer usage after database is closed
 }
 
 int SqliteDatabase::postconnect()
@@ -481,48 +489,48 @@ int SqliteDatabase::drop_analytics()
   result_set res;
 
   CLog::LogFC(LOGDEBUG, LOGDATABASE, "Cleaning indexes from database {} at {}", db, host);
-  last_err =
+  int err =
       sqlite3_exec(conn, "SELECT name FROM sqlite_master WHERE type == 'index' AND sql IS NOT NULL",
                    &callback, &res, nullptr);
-  if (last_err != SQLITE_OK)
+  if (err != SQLITE_OK)
     return DB_UNEXPECTED_RESULT;
 
   std::string sqlcmd;
   for (const auto record : res.records)
   {
-    sqlcmd = StringUtils::Format("DROP INDEX '{}'", record->at(0).get_asString().c_str());
-    last_err = sqlite3_exec(conn, sqlcmd.c_str(), nullptr, nullptr, nullptr);
-    if (last_err != SQLITE_OK)
+    sqlcmd = StringUtils::Format("DROP INDEX `{}`", record->at(0).get_asString().c_str());
+    err = sqlite3_exec(conn, sqlcmd.c_str(), nullptr, nullptr, nullptr);
+    if (err != SQLITE_OK)
       return DB_UNEXPECTED_RESULT;
   }
   res.clear();
 
   CLog::LogFC(LOGDEBUG, LOGDATABASE, "Cleaning views from database {} at {}", db, host);
-  last_err = sqlite3_exec(conn, "SELECT name FROM sqlite_master WHERE type == 'view'", &callback,
-                          &res, nullptr);
-  if (last_err != SQLITE_OK)
+  err = sqlite3_exec(conn, "SELECT name FROM sqlite_master WHERE type == 'view'", &callback, &res,
+                     nullptr);
+  if (err != SQLITE_OK)
     return DB_UNEXPECTED_RESULT;
 
   for (const auto& record : res.records)
   {
-    sqlcmd = StringUtils::Format("DROP VIEW '{}'", record->at(0).get_asString().c_str());
-    last_err = sqlite3_exec(conn, sqlcmd.c_str(), nullptr, nullptr, nullptr);
-    if (last_err != SQLITE_OK)
+    sqlcmd = StringUtils::Format("DROP VIEW `{}`", record->at(0).get_asString().c_str());
+    err = sqlite3_exec(conn, sqlcmd.c_str(), nullptr, nullptr, nullptr);
+    if (err != SQLITE_OK)
       return DB_UNEXPECTED_RESULT;
   }
   res.clear();
 
   CLog::LogFC(LOGDEBUG, LOGDATABASE, "Cleaning triggers from database {} at {}", db, host);
-  last_err = sqlite3_exec(conn, "SELECT name FROM sqlite_master WHERE type == 'trigger'", &callback,
-                          &res, nullptr);
-  if (last_err != SQLITE_OK)
+  err = sqlite3_exec(conn, "SELECT name FROM sqlite_master WHERE type == 'trigger'", &callback,
+                     &res, nullptr);
+  if (err != SQLITE_OK)
     return DB_UNEXPECTED_RESULT;
 
   for (const auto& record : res.records)
   {
-    sqlcmd = StringUtils::Format("DROP TRIGGER '{}'", record->at(0).get_asString().c_str());
-    last_err = sqlite3_exec(conn, sqlcmd.c_str(), nullptr, nullptr, nullptr);
-    if (last_err != SQLITE_OK)
+    sqlcmd = StringUtils::Format("DROP TRIGGER `{}`", record->at(0).get_asString().c_str());
+    err = sqlite3_exec(conn, sqlcmd.c_str(), nullptr, nullptr, nullptr);
+    if (err != SQLITE_OK)
       return DB_UNEXPECTED_RESULT;
   }
   // res would be cleared on destruct
@@ -553,8 +561,8 @@ long SqliteDatabase::nextid(const char* sname)
   result_set res;
   std::string sqlcmd{
       StringUtils::Format("SELECT nextid FROM {} WHERE seq_name = '{}'", sequence_table, sname)};
-  last_err = sqlite3_exec(getHandle(), sqlcmd.c_str(), &callback, &res, nullptr);
-  if (last_err != SQLITE_OK)
+  int err = sqlite3_exec(getHandle(), sqlcmd.c_str(), &callback, &res, nullptr);
+  if (err != SQLITE_OK)
   {
     return DB_UNEXPECTED_RESULT;
   }
@@ -563,8 +571,8 @@ long SqliteDatabase::nextid(const char* sname)
     id = 1;
     sqlcmd = StringUtils::Format("INSERT INTO {} (nextid,seq_name) VALUES ({},'{}')",
                                  sequence_table, id, sname);
-    last_err = sqlite3_exec(conn, sqlcmd.c_str(), nullptr, nullptr, nullptr);
-    if (last_err != SQLITE_OK)
+    err = sqlite3_exec(conn, sqlcmd.c_str(), nullptr, nullptr, nullptr);
+    if (err != SQLITE_OK)
       return DB_UNEXPECTED_RESULT;
     return id;
   }
@@ -573,8 +581,8 @@ long SqliteDatabase::nextid(const char* sname)
     id = res.records[0]->at(0).get_asInt() + 1;
     sqlcmd = StringUtils::Format("UPDATE {} SET nextid={} WHERE seq_name = '{}'", sequence_table,
                                  id, sname);
-    last_err = sqlite3_exec(conn, sqlcmd.c_str(), nullptr, nullptr, nullptr);
-    if (last_err != SQLITE_OK)
+    err = sqlite3_exec(conn, sqlcmd.c_str(), nullptr, nullptr, nullptr);
+    if (err != SQLITE_OK)
       return DB_UNEXPECTED_RESULT;
     return id;
   }
@@ -890,7 +898,7 @@ int SqliteDataset::exec(const std::string& sql)
 
   const auto start = std::chrono::steady_clock::now();
 
-  char* errmsg;
+  char* errmsg = nullptr; // Must be initialized to nullptr; sqlite3_exec may not always set it
   const int res =
       db->setErr(sqlite3_exec(handle(), qry.c_str(), &callback, &exec_res, &errmsg), qry.c_str());
 
@@ -907,13 +915,20 @@ int SqliteDataset::exec(const std::string& sql)
   {
     if (errmsg)
     {
-      DbErrors err("%s (%s)", db->getErrorMsg(), errmsg);
+      // Guard against possible NULL strings from getErrorMsg
+      const char* dbErr = db->getErrorMsg();
+      if (!dbErr)
+        dbErr = "unknown database error";
+      DbErrors err("%s (%s)", dbErr, errmsg);
       sqlite3_free(errmsg);
       throw err;
     }
     else
     {
-      throw DbErrors("%s", db->getErrorMsg());
+      const char* dbErr = db->getErrorMsg();
+      if (!dbErr)
+        dbErr = "unknown database error";
+      throw DbErrors("%s", dbErr);
     }
   }
 }
